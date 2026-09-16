@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' https: data:; media-src https: blob:; connect-src https:; style-src 'self' 'unsafe-inline'; script-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Mundial TV</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="titlebar">
+      <div class="brand">
+        <img class="brand-mark" src="../assets/mark.png" alt="" />
+        <span class="brand-name">Mundial <em>TV</em></span>
+      </div>
+
+      <div class="search">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.25" />
+          <path d="M10.2 10.2 14 14" />
+        </svg>
+        <input
+          id="search"
+          type="search"
+          placeholder="Buscar canal"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Buscar canal"
+        />
+      </div>
+
+      <div class="titlebar-actions">
+        <button class="ghost-btn" id="btn-remote" title="Mando desde el móvil" aria-label="Mando desde el móvil">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.6" y="1.6" width="6.8" height="12.8" rx="1.7" /><path d="M7 12.2h2" /></svg>
+        </button>
+        <button class="ghost-btn" id="btn-refresh" title="Actualizar la lista de canales" aria-label="Actualizar la lista de canales">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" /><path d="M13.5 2.5V5H11" /></svg>
+        </button>
+        <button class="ghost-btn" id="btn-about" title="Acerca de" aria-label="Acerca de">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.2v.1" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <nav class="groups" id="groups" aria-label="Grupos de canales"></nav>
+        <div class="sidebar-foot">
+          <p class="sidebar-note" id="playlist-note"></p>
+        </div>
+      </aside>
+
+      <section class="content">
+        <div class="grid-view" id="grid-view">
+          <div class="view-head">
+            <h1 id="view-title">Destacados</h1>
+            <p id="view-sub"></p>
+          </div>
+          <div class="now-playing" id="now-playing" hidden>
+            <span class="dot"></span>
+            <span class="now-playing-text">
+              <b id="now-playing-name"></b>
+              <small id="now-playing-note"></small>
+            </span>
+            <span class="now-playing-actions">
+              <button class="ghost-btn wide" id="btn-now-watch">Ver</button>
+              <button class="ghost-btn wide" id="btn-now-stop">Parar</button>
+            </span>
+          </div>
+
+          <div class="grid" id="grid"></div>
+          <p class="empty" id="empty" hidden>Ningún canal coincide con la búsqueda.</p>
+        </div>
+
+        <div class="player-view" id="player-view" hidden>
+          <div class="player-head">
+            <button class="ghost-btn" id="btn-back" title="Volver a la lista de canales" aria-label="Volver">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5" /></svg>
+            </button>
+            <div class="player-meta">
+              <h1 id="player-title">—</h1>
+              <p id="player-sub"></p>
+            </div>
+            <span class="badge" id="player-badge" hidden></span>
+            <div class="player-head-actions">
+              <button class="ghost-btn" id="btn-fav" title="Añadir a favoritos" aria-label="Añadir a favoritos">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m8 2.6 1.7 3.6 3.9.5-2.9 2.7.8 3.9L8 11.4l-3.5 1.9.8-3.9-2.9-2.7 3.9-.5Z" /></svg>
+              </button>
+              <button class="ghost-btn" id="btn-mini" title="Minirreproductor siempre visible" aria-label="Minirreproductor siempre visible">
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <rect x="1.6" y="3.2" width="12.8" height="9.6" rx="1.4" />
+                  <rect x="8.2" y="8.4" width="4.6" height="3.2" rx="0.9" />
+                </svg>
+              </button>
+              <button class="ghost-btn" id="btn-external" title="Abrir este directo en el navegador" aria-label="Abrir en el navegador" hidden>
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3h3.5v3.5" /><path d="M13 3 7.5 8.5" /><path d="M12 10v2.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5H6" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="stage" id="stage">
+            <video id="video" playsinline></video>
+
+            <div class="web-host" id="web-host" hidden></div>
+
+            <div class="stage-message" id="stage-message" hidden>
+              <div class="spinner" id="stage-spinner" hidden></div>
+              <svg class="stage-message-icon" id="stage-icon" viewBox="0 0 24 24" aria-hidden="true" hidden>
+                <path d="M12 3 2.5 20h19L12 3Z" /><path d="M12 10v4.5M12 17.2v.1" />
+              </svg>
+              <p id="stage-message-text"></p>
+              <div class="stage-message-actions">
+                <button class="primary-btn" id="btn-retry" hidden>Reintentar</button>
+                <button class="ghost-btn wide" id="btn-next-source" hidden>Probar otra fuente</button>
+              </div>
+            </div>
+
+            <div class="stage-message" id="mini-message" hidden>
+              <svg class="stage-message-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.6" y="3.2" width="12.8" height="9.6" rx="1.4" />
+                <rect x="8.2" y="8.4" width="4.6" height="3.2" rx="0.9" />
+              </svg>
+              <p>Este canal se está viendo en el minirreproductor, que permanece por encima del resto de ventanas.</p>
+              <div class="stage-message-actions">
+                <button class="primary-btn" id="btn-mini-back">Traerlo de vuelta</button>
+              </div>
+            </div>
+
+            <div class="controls" id="controls">
+              <button class="ctrl-btn" id="btn-play" title="Reproducir o pausar" aria-label="Reproducir o pausar">
+                <svg viewBox="0 0 16 16" id="icon-play" aria-hidden="true"><path d="M4.5 3 12.5 8l-8 5V3Z" /></svg>
+                <svg viewBox="0 0 16 16" id="icon-pause" aria-hidden="true" hidden><path d="M5 3.5v9M11 3.5v9" /></svg>
+              </button>
+
+              <span class="live-flag"><span class="dot"></span>EN DIRECTO</span>
+
+              <div class="controls-spacer"></div>
+
+              <label class="select-wrap" id="wrap-quality" hidden>
+                <span>Calidad</span>
+                <select id="sel-quality"></select>
+              </label>
+              <label class="select-wrap" id="wrap-audio" hidden>
+                <span>Audio</span>
+                <select id="sel-audio"></select>
+              </label>
+              <label class="select-wrap" id="wrap-subs" hidden>
+                <span>Subtítulos</span>
+                <select id="sel-subs"></select>
+              </label>
+
+              <button class="ctrl-btn" id="btn-mute" title="Silenciar" aria-label="Silenciar">
+                <svg viewBox="0 0 16 16" id="icon-volume" aria-hidden="true"><path d="M3 6h2.5L9 3.2v9.6L5.5 10H3V6Z" /><path d="M11.4 5.6a3.4 3.4 0 0 1 0 4.8" /></svg>
+                <svg viewBox="0 0 16 16" id="icon-muted" aria-hidden="true" hidden><path d="M3 6h2.5L9 3.2v9.6L5.5 10H3V6Z" /><path d="m11.5 6.5 3 3m0-3-3 3" /></svg>
+              </button>
+              <input class="volume" id="vol" type="range" min="0" max="1" step="0.02" value="1" aria-label="Volumen" />
+
+              <button class="ctrl-btn" id="btn-full" title="Pantalla completa" aria-label="Pantalla completa">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 6V3h3M13 6V3h-3M3 10v3h3M13 10v3h-3" /></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <dialog class="sheet" id="about">
+      <header class="sheet-head">
+        <h2>Acerca de Mundial TV</h2>
+        <button class="ghost-btn" id="btn-close-about" aria-label="Cerrar">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+        </button>
+      </header>
+
+      <div class="sheet-body">
+        <dl class="facts">
+          <div><dt>Versión</dt><dd id="fact-version">—</dd></div>
+          <div><dt>Electron</dt><dd id="fact-electron">—</dd></div>
+          <div><dt>Chromium</dt><dd id="fact-chrome">—</dd></div>
+          <div><dt>Canales disponibles</dt><dd id="fact-channels">—</dd></div>
+          <div><dt>Lista actualizada</dt><dd id="fact-updated">—</dd></div>
+        </dl>
+
+        <label class="check">
+          <input type="checkbox" id="toggle-int" />
+          <span>Mostrar los canales internacionales</span>
+        </label>
+
+        <label class="check">
+          <input type="checkbox" id="toggle-ads" />
+          <span>Pulsar el botón de saltar anuncio en cuanto el reproductor oficial lo muestre</span>
+        </label>
+
+        <p class="sheet-note" id="sheet-attribution"></p>
+
+        <div class="sheet-actions">
+          <button class="primary-btn" id="btn-open-repo">Ver el proyecto en GitHub</button>
+          <button class="ghost-btn wide" id="btn-refresh-2">Actualizar lista de canales</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog class="sheet" id="remote">
+      <header class="sheet-head">
+        <h2>Mando desde el móvil</h2>
+        <button class="ghost-btn" id="btn-close-remote" aria-label="Cerrar">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+        </button>
+      </header>
+      <div class="sheet-body">
+        <p class="sheet-note" id="remote-note"></p>
+        <div class="qr-box" id="qr-box"></div>
+        <p class="remote-url"><code id="remote-url">—</code></p>
+        <div class="sheet-actions">
+          <button class="primary-btn" id="btn-copy-remote">Copiar la dirección</button>
+          <button class="ghost-btn wide" id="btn-open-remote">Abrirla aquí</button>
+        </div>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" hidden></div>
+
+    <script src="vendor/hls.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

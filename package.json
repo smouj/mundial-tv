@@ -1,0 +1,74 @@
+{
+  "name": "mundial-tv",
+  "productName": "Mundial TV",
+  "version": "1.0.0",
+  "description": "Reproductor de escritorio de television en directo de todo el mundo: rejilla de canales por pais y genero, HLS oficial con seleccion de calidad, audio y subtitulos, minirreproductor siempre visible y acceso a los canales que solo emiten desde su reproductor oficial.",
+  "main": "src/main/main.js",
+  "author": {
+    "name": "SMOUJ013",
+    "email": "hecpoley11@gmail.com",
+    "url": "https://github.com/smouj"
+  },
+  "license": "MIT",
+  "private": false,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/**/*.test.js\"",
+    "vendor": "node scripts/vendor.js",
+    "icons": "python3 scripts/icons.py",
+    "snapshot": "node scripts/snapshot.js",
+    "prepack": "npm run vendor",
+    "dist": "electron-builder --win --x64",
+    "dist:dir": "electron-builder --win --x64 --dir"
+  },
+  "devDependencies": {
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3",
+    "hls.js": "^1.7.3"
+  },
+  "build": {
+    "appId": "es.smouj.mundialtv",
+    "productName": "Mundial TV",
+    "copyright": "Copyright © 2026 SMOUJ013",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "resources/canales.m3u",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Mundial-TV-${version}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Mundial TV",
+      "menuCategory": "Multimedia",
+      "installerLanguages": [
+        "es_ES",
+        "en_US"
+      ],
+      "language": "1034",
+      "uninstallDisplayName": "Mundial TV"
+    }
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  }
+}
