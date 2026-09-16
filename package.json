@@ -18,7 +18,7 @@
     "icons": "python3 scripts/icons.py",
     "snapshot": "node scripts/snapshot.js",
     "prepack": "npm run vendor",
-    "dist": "electron-builder --win --x64",
+    "dist": "electron-builder --win --x64 --publish never",
     "dist:dir": "electron-builder --win --x64 --dir"
   },
   "devDependencies": {

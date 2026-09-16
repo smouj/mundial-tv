@@ -42,3 +42,12 @@ jobs:
           name: Mundial-TV-Windows
           path: dist/*.exe
           if-no-files-found: error
+
+      - name: Publicar la version
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.exe
+            dist/*.blockmap
+          generate_release_notes: true
