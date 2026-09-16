@@ -94,26 +94,35 @@ class Remote {
    * @param {() => object} options.getState estado actual de reproducción
    * @param {(command: object) => void} options.onCommand aviso a la ventana principal
    */
-  constructor({ getChannels, getState, onCommand, port = DEFAULT_PORT }) {
+  constructor({ getChannels, getState, onCommand, port = DEFAULT_PORT, token } = {}) {
     this.getChannels = getChannels;
     this.getState = getState;
     this.onCommand = onCommand;
     this.port = port;
-    this.token = crypto.randomBytes(9).toString('hex');
+    // La clave se reutiliza entre arranques (la guarda la aplicación) para que
+    // el móvil que ya la tenía guardada siga funcionando sin volver al QR.
+    this.token = token || crypto.randomBytes(16).toString('hex');
     this.server = null;
     this.address = localAddress();
     this.error = null;
+    /** Puerto en el que realmente se ha escuchado. */
+    this.activePort = null;
   }
 
   get url() {
-    return `http://${this.address}:${this.port}/?k=${this.token}`;
+    return `http://${this.address}:${this.boundPort}/?k=${this.token}`;
+  }
+
+  /** Puerto en uso: el pedido o, si estaba ocupado, el que se pudo abrir. */
+  get boundPort() {
+    return this.activePort || this.port;
   }
 
   get info() {
     return {
       running: Boolean(this.server),
       url: this.url,
-      port: this.port,
+      port: this.boundPort,
       address: this.address,
       error: this.error,
     };
@@ -264,13 +273,17 @@ class Remote {
       });
       server.listen(this.port, '0.0.0.0', () => {
         this.server = server;
+        // Se pregunta al sistema: así también vale pedir el puerto 0.
+        this.activePort = server.address().port;
         this.error = null;
         resolve(this.info);
       });
     });
   }
 
+  /** Deja de escuchar y olvida el puerto, para poder volver a arrancar. */
   stop() {
+    this.activePort = null;
     if (!this.server) return;
     try {
       this.server.close();

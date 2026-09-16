@@ -12,6 +12,10 @@ const DEFAULTS = Object.freeze({
   resumeLast: true,
   showInternational: true,
   skipAds: true,
+  /** Clave del mando: se guarda para no tener que volver a escanear el QR. */
+  remoteToken: null,
+  /** Puerto en el que funcionó el mando la última vez. */
+  remotePort: null,
   windowBounds: null,
 });
 

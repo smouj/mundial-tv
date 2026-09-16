@@ -1,6 +1,7 @@
 'use strict';
 
 const { app, BrowserWindow, WebContentsView, ipcMain, net, screen, session, shell } = require('electron');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -479,9 +480,29 @@ function startAdWatcher() {
   }, 1500);
 }
 
+/**
+ * Clave del mando.
+ *
+ * Se genera una sola vez y se guarda: así el teléfono que ya la tenía —o el
+ * icono que se haya añadido a su pantalla de inicio— sigue funcionando en los
+ * siguientes arranques, sin volver a escanear el código.
+ */
+function remoteToken() {
+  const saved = settings.get('remoteToken');
+  if (typeof saved === 'string' && /^[a-f0-9]{16,}$/.test(saved)) return saved;
+  const token = crypto.randomBytes(16).toString('hex');
+  settings.patch({ remoteToken: token });
+  return token;
+}
+
 /** Arranca el servidor del mando dentro de la red local. */
 function startRemote() {
+  const savedPort = Number(settings.get('remotePort'));
+  const port = Number.isInteger(savedPort) && savedPort > 1024 ? savedPort : undefined;
+
   remote = new Remote({
+    token: remoteToken(),
+    port,
     getChannels: () => catalogue.channels,
     getState: () => remoteState,
     onCommand: (command) => {
@@ -490,13 +511,23 @@ function startRemote() {
       }
     },
   });
-  remote
-    .start()
-    .then((info) => {
-      // Útil cuando se arranca desde una consola: deja a la vista la dirección
-      // del mando por si no se quiere escanear el código.
-      if (info.running) console.log(`Mando del móvil: ${info.url}`);
-    });
+
+  return remote.start().then((info) => {
+    if (info.running) {
+      if (settings.get('remotePort') !== info.port) settings.patch({ remotePort: info.port });
+      // Útil al arrancar desde una consola: deja a la vista la dirección.
+      console.log(`Mando del móvil: ${info.url}`);
+    }
+    return info;
+  });
+}
+
+/** Cambia la clave por una nueva y vuelve a levantar el mando. */
+async function rotateRemoteToken() {
+  settings.patch({ remoteToken: crypto.randomBytes(16).toString('hex') });
+  if (remote) remote.stop();
+  await startRemote();
+  return remoteInfo();
 }
 
 /** Información del mando para la ventana, con el código QR ya dibujado. */
@@ -564,6 +595,7 @@ function registerIpc() {
     return { ok: true };
   });
   ipcMain.handle('remote:info', () => remoteInfo());
+  ipcMain.handle('remote:rotate', () => rotateRemoteToken());
   ipcMain.handle('remote:refresh', () => remoteInfo());
   ipcMain.on('remote:state', (_event, payload) => {
     if (payload && typeof payload === 'object') remoteState = { ...remoteState, ...payload };

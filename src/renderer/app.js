@@ -126,6 +126,7 @@ const dom = {
   closeRemote: el('btn-close-remote'),
   copyRemote: el('btn-copy-remote'),
   openRemote: el('btn-open-remote'),
+  rotateRemote: el('btn-rotate-remote'),
   mini: el('btn-mini'),
   miniBack: el('btn-mini-back'),
   miniMessage: el('mini-message'),
@@ -928,13 +929,8 @@ function openSheet(dialog) {
   dialog.showModal();
 }
 
-async function openRemoteDialog() {
-  let info = null;
-  try {
-    info = await window.mundial.remoteInfo();
-  } catch {
-    info = null;
-  }
+/** Pinta en el cuadro del mando los datos que devuelve el proceso principal. */
+function renderRemoteInfo(info) {
   dom.qrBox.textContent = '';
   dom.qrBox.hidden = false;
 
@@ -952,6 +948,16 @@ async function openRemoteDialog() {
     info && info.running
       ? 'Escanea el código con el móvil, o escribe la dirección en su navegador. El teléfono tiene que estar en la misma red Wi-Fi que este ordenador.'
       : 'El mando no ha podido arrancar. Puede que el puerto esté ocupado por otro programa.';
+}
+
+async function openRemoteDialog() {
+  let info = null;
+  try {
+    info = await window.mundial.remoteInfo();
+  } catch {
+    info = null;
+  }
+  renderRemoteInfo(info);
   openSheet(dom.remoteDialog);
 }
 
@@ -1050,6 +1056,17 @@ function wireEvents() {
       showToast('Selecciona la dirección y cópiala a mano.');
     }
   });
+  dom.rotateRemote.addEventListener('click', async () => {
+    dom.rotateRemote.disabled = true;
+    try {
+      renderRemoteInfo(await window.mundial.rotateRemote());
+      showToast('Clave nueva. El móvil que estaba conectado tendrá que escanear el código otra vez.');
+    } catch {
+      showToast('No se ha podido generar una clave nueva.');
+    }
+    dom.rotateRemote.disabled = false;
+  });
+
   dom.openRemote.addEventListener('click', () => {
     const url = dom.remoteUrl.textContent;
     if (/^https?:\/\//i.test(url)) window.mundial.openExternal(url);

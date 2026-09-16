@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('mundial', {
   },
   openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
   remoteInfo: () => ipcRenderer.invoke('remote:info'),
+  rotateRemote: () => ipcRenderer.invoke('remote:rotate'),
   publishRemoteState: (state) => ipcRenderer.send('remote:state', state),
   controlOfficialPlayback: (action, value) => ipcRenderer.invoke('official:control', action, value),
   onRemoteCommand: (listener) => {
