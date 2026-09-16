@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('mundial', {
   updateOfficialBounds: (bounds) => ipcRenderer.invoke('official:bounds', bounds),
   closeOfficial: () => ipcRenderer.invoke('official:close'),
   toggleMiniView: (active) => ipcRenderer.invoke('official:mini', active),
+  setOfficialVisible: (visible) => ipcRenderer.invoke('official:visible', visible),
   onMiniChange: (listener) => {
     ipcRenderer.on('official:mini-changed', (_event, payload) => listener(payload));
   },

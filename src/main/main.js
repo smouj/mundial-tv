@@ -490,7 +490,13 @@ function startRemote() {
       }
     },
   });
-  remote.start();
+  remote
+    .start()
+    .then((info) => {
+      // Útil cuando se arranca desde una consola: deja a la vista la dirección
+      // del mando por si no se quiere escanear el código.
+      if (info.running) console.log(`Mando del móvil: ${info.url}`);
+    });
 }
 
 /** Información del mando para la ventana, con el código QR ya dibujado. */
@@ -542,6 +548,13 @@ function registerIpc() {
     return { ok: Boolean(officialView) };
   });
   ipcMain.handle('official:mini', (_event, active) => (active ? enterMiniView() : leaveMiniView()));
+  ipcMain.handle('official:visible', (_event, visible) => {
+    // La vista del reproductor oficial se pinta siempre por encima de la
+    // página: hay que apartarla mientras se muestra un cuadro de diálogo, o el
+    // diálogo quedaría oculto detrás del vídeo.
+    if (officialView) officialView.setVisible(Boolean(visible));
+    return { ok: Boolean(officialView) };
+  });
   ipcMain.handle('official:close', () => {
     closeOfficialView();
     return { ok: true };

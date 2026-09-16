@@ -2,7 +2,11 @@
 
 Aplicación de escritorio para ver televisión en directo de todo el mundo desde el ordenador. La TDT española al completo, las autonómicas, los canales internacionales y los que solo emiten desde su propio reproductor, todo en una sola ventana y sin páginas web de por medio.
 
-![Mundial TV](docs/captura.png)
+![Rejilla de canales de Mundial TV](docs/captura.png)
+
+| Reproductor | Minirreproductor | Mando del móvil |
+| --- | --- | --- |
+| ![Reproductor con calidad y audio seleccionables](docs/reproductor.png) | ![Ventana flotante siempre visible](docs/minirreproductor.png) | ![Mando desde el teléfono](docs/mando.png) |
 
 ---
 
@@ -112,6 +116,7 @@ build/                   recursos de compilación (iconos)
 | `F` | Pantalla completa |
 | `M` | Silenciar |
 | `↑` / `↓` | Subir o bajar el volumen |
+| `R` | Abrir el mando del móvil |
 | `Esc` | Salir del buscador |
 
 ## Privacidad

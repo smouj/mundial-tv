@@ -131,8 +131,10 @@ def build_mark() -> Image.Image:
 def main() -> None:
     build = ROOT / "build"
     assets = ROOT / "src" / "assets"
+    resources = ROOT / "resources"
     build.mkdir(parents=True, exist_ok=True)
     assets.mkdir(parents=True, exist_ok=True)
+    resources.mkdir(parents=True, exist_ok=True)
 
     tile = build_tile().resize((UNIT, UNIT), Image.Resampling.LANCZOS)
     tile.save(build / "icon.png", "PNG")
@@ -142,6 +144,14 @@ def main() -> None:
 
     mark = build_mark().resize((256, 256), Image.Resampling.LANCZOS)
     mark.save(assets / "mark.png", "PNG")
+
+    # Iconos del mando: el móvil los pide para poner el acceso en su pantalla
+    # de inicio, así que tienen que ser cuadrados y opacos.
+    for side in (192, 512):
+        tile.resize((side, side), Image.Resampling.LANCZOS).save(
+            resources / f"mando-{side}.png", "PNG"
+        )
+        print(f"resources/mando-{side}.png")
 
     print(f"build/icon.png {tile.size[0]}x{tile.size[1]}")
     print(f"build/icon.ico {len(icon_sizes)} tamaños")

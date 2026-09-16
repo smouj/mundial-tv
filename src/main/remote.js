@@ -13,10 +13,47 @@
  */
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
+const path = require('node:path');
+
+const { mobilePage } = require('./remote-page');
 
 const DEFAULT_PORT = 8712;
+
+/** Carpeta de recursos de la aplicación, dentro del paquete. */
+const RESOURCES = path.join(__dirname, '..', '..', 'resources');
+
+/**
+ * Controlador de servicio mínimo.
+ *
+ * No hace falta para cambiar de canal, pero es lo que permite que el móvil
+ * ofrezca «añadir a la pantalla de inicio» y que el mando abra a pantalla
+ * completa y con su propio icono, como una aplicación.
+ */
+const SERVICE_WORKER = [
+  "const CACHE = 'mundial-mando';",
+  "self.addEventListener('install', () => self.skipWaiting());",
+  "self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));",
+  "self.addEventListener('fetch', (event) => {",
+  "  const request = event.request;",
+  "  if (request.method !== 'GET') return;",
+  "  const url = new URL(request.url);",
+  "  if (url.origin !== self.location.origin) return;",
+  "  if (url.pathname !== '/' && !url.pathname.startsWith('/icono-')) return;",
+  "  event.respondWith(",
+  "    fetch(request)",
+  "      .then((response) => {",
+  "        const copy = response.clone();",
+  "        caches.open(CACHE).then((cache) => cache.put(request, copy));",
+  "        return response;",
+  "      })",
+  "      .catch(() => caches.match(request).then((hit) => hit || Response.error())),",
+  "  );",
+  "});",
+  "",
+].join('\n');
 
 /** Adaptadores que no llevan a ningún sitio desde el teléfono. */
 const VIRTUAL_ADAPTER = /(vethernet|wsl|hyper-v|virtualbox|vmware|docker|loopback|bluetooth|tap-)/i;
@@ -44,150 +81,10 @@ function localAddress() {
   return real[0] || virtual[0] || '127.0.0.1';
 }
 
-/** Página del mando. HTML, CSS y JavaScript sin dependencias, válido para cualquier móvil. */
-function mobilePage(token) {
-  return [
-    '<!doctype html>',
-    '<html lang="es">',
-    '<head>',
-    '<meta charset="utf-8">',
-    '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">',
-    '<meta name="color-scheme" content="dark">',
-    '<meta name="theme-color" content="#0b0f14">',
-    '<title>Mando de Mundial TV</title>',
-    '<style>',
-    ':root{--bg:#0b0f14;--surface:#121821;--surface2:#182230;--border:#223040;--text:#e7eef5;',
-    '--muted:#8494a4;--accent:#f0a53c;--live:#e5484d}',
-    '*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}',
-    'body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,',
-    '"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding-bottom:env(safe-area-inset-bottom)}',
-    'header{position:sticky;top:0;z-index:5;background:#0e141b;border-bottom:1px solid var(--border);',
-    'padding:calc(12px + env(safe-area-inset-top)) 14px 12px}',
-    '.brand{display:flex;align-items:center;gap:8px;font-weight:600}',
-    '.brand span{width:9px;height:9px;border-radius:50%;background:var(--live);flex:none}',
-    '.now{margin-top:6px;color:var(--muted);font-size:13px;min-height:18px}',
-    '.now b{color:var(--text);font-weight:600}',
-    '.controls{display:flex;align-items:center;gap:10px;margin-top:12px}',
-    'button{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--border);',
-    'border-radius:10px;padding:0 14px;height:40px;cursor:pointer}',
-    'button:active{background:var(--surface2)}',
-    'button.primary{background:var(--accent);border-color:var(--accent);color:#241704;font-weight:600}',
-    '.vol{flex:1;display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}',
-    'input[type=range]{flex:1;accent-color:var(--accent);height:32px}',
-    '.search{padding:12px 14px 6px}',
-    'input[type=search]{width:100%;height:42px;padding:0 12px;background:var(--surface);',
-    'border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:16px;outline:none}',
-    'input[type=search]:focus{border-color:#33465c}',
-    'ul{list-style:none;margin:0;padding:6px 8px 24px}',
-    'li{display:flex;align-items:center;gap:12px;padding:9px 8px;border-radius:12px;cursor:pointer}',
-    'li:active{background:var(--surface2)}',
-    'li.on{background:var(--surface2);box-shadow:inset 3px 0 0 var(--accent)}',
-    '.logo{width:46px;height:32px;flex:none;border-radius:6px;background:#0d131a;display:flex;',
-    'align-items:center;justify-content:center;overflow:hidden;font-size:12px;font-weight:600;color:var(--muted)}',
-    '.logo img{max-width:100%;max-height:100%;object-fit:contain}',
-    '.meta{min-width:0}',
-    '.meta b{display:block;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-    '.meta small{color:var(--muted)}',
-    '.hint{padding:0 14px 8px;color:var(--muted);font-size:12px}',
-    '.error{margin:14px;padding:12px;border:1px solid var(--border);border-radius:10px;color:var(--muted)}',
-    '</style>',
-    '</head>',
-    '<body>',
-    '<header>',
-    '  <div class="brand"><span></span>Mundial TV</div>',
-    '  <div class="now" id="now">Conectando con el ordenador…</div>',
-    '  <div class="controls">',
-    '    <button id="play" class="primary">Pausa</button>',
-    '    <button id="stop">Parar</button>',
-    '    <div class="vol"><span>Vol</span><input id="vol" type="range" min="0" max="1" step="0.05" value="1"></div>',
-    '  </div>',
-    '</header>',
-    '<div class="search"><input id="q" type="search" placeholder="Buscar canal" autocomplete="off"></div>',
-    '<p class="hint" id="hint"></p>',
-    '<ul id="list"></ul>',
-    '<script>',
-    'var TOKEN = ' + JSON.stringify(token) + ';',
-    'var canales = [];',
-    'var actual = null;',
-    'var reproduciendo = false;',
-    'function pedir(ruta, opciones) {',
-    '  opciones = opciones || {};',
-    '  opciones.headers = { "Content-Type": "application/json", "X-Clave": TOKEN };',
-    '  return fetch(ruta, opciones).then(function (r) { return r.json(); });',
-    '}',
-    'function comando(accion, datos) {',
-    '  var cuerpo = Object.assign({ accion: accion }, datos || {});',
-    '  return pedir("/api/comando", { method: "POST", body: JSON.stringify(cuerpo) });',
-    '}',
-    'function pintar() {',
-    '  var q = (document.getElementById("q").value || "").toLowerCase();',
-    '  var lista = document.getElementById("list");',
-    '  var filtrados = canales.filter(function (c) {',
-    '    return !q || c.nombre.toLowerCase().indexOf(q) >= 0 || (c.grupo || "").toLowerCase().indexOf(q) >= 0;',
-    '  });',
-    '  lista.innerHTML = "";',
-    '  filtrados.forEach(function (c) {',
-    '    var li = document.createElement("li");',
-    '    if (c.id === actual) li.className = "on";',
-    '    var logo = document.createElement("div");',
-    '    logo.className = "logo";',
-    '    if (c.logo) {',
-    '      var img = document.createElement("img");',
-    '      img.loading = "lazy";',
-    '      img.src = c.logo;',
-    '      img.onerror = function () { logo.textContent = c.iniciales; img.remove(); };',
-    '      logo.appendChild(img);',
-    '    } else {',
-    '      logo.textContent = c.iniciales;',
-    '    }',
-    '    var meta = document.createElement("div");',
-    '    meta.className = "meta";',
-    '    var b = document.createElement("b");',
-    '    b.textContent = c.nombre;',
-    '    var s = document.createElement("small");',
-    '    s.textContent = c.grupo;',
-    '    meta.appendChild(b); meta.appendChild(s);',
-    '    li.appendChild(logo); li.appendChild(meta);',
-    '    li.addEventListener("click", function () {',
-    '      comando("canal", { canalId: c.id }).then(estado);',
-    '    });',
-    '    lista.appendChild(li);',
-    '  });',
-    '  document.getElementById("hint").textContent = filtrados.length + " canales";',
-    '}',
-    'function estado() {',
-    '  return pedir("/api/estado").then(function (d) {',
-    '    actual = d.actual;',
-    '    reproduciendo = !!d.reproduciendo;',
-    '    document.getElementById("play").textContent = reproduciendo ? "Pausa" : "Reproducir";',
-    '    document.getElementById("now").innerHTML = d.nombre',
-    '      ? "En el ordenador: <b>" + d.nombre + "</b>"',
-    '      : "Ningún canal en el ordenador";',
-    '    if (d.volumen !== null && d.volumen !== undefined) {',
-    '      document.getElementById("vol").value = d.volumen;',
-    '    }',
-    '    if (!canales.length && d.canales) { canales = d.canales; }',
-    '    pintar();',
-    '  }).catch(function () {',
-    '    document.getElementById("now").textContent = "Se ha perdido la conexión con el ordenador";',
-    '  });',
-    '}',
-    'document.getElementById("q").addEventListener("input", pintar);',
-    'document.getElementById("play").addEventListener("click", function () {',
-    '  comando(reproduciendo ? "pausa" : "reanudar").then(estado);',
-    '});',
-    'document.getElementById("stop").addEventListener("click", function () {',
-    '  comando("detener").then(estado);',
-    '});',
-    'document.getElementById("vol").addEventListener("change", function () {',
-    '  comando("volumen", { valor: Number(this.value) }).then(estado);',
-    '});',
-    'estado();',
-    'setInterval(estado, 3000);',
-    '</' + 'script>',
-    '</body>',
-    '</html>',
-  ].join('\n');
+
+/** Grupos que la lista marca como internacionales. */
+function isWorld(name) {
+  return /^Int\./.test(name);
 }
 
 class Remote {
@@ -222,6 +119,24 @@ class Remote {
     };
   }
 
+  /** Grupos en el orden en que deben aparecer los filtros del móvil. */
+  groupsForPhone() {
+    const nombres = [];
+    for (const channel of this.getChannels()) {
+      if (!nombres.includes(channel.group)) nombres.push(channel.group);
+    }
+    const orden = (a, b) => a.localeCompare(b, 'es');
+    const oficiales = ['Atresmedia', 'Mediaset'].filter((name) => nombres.includes(name));
+    // Primero los géneros nacionales y después las comunidades y el mundo.
+    const generos = ['Generalistas', 'Informativos', 'Deportivos', 'Infantiles', 'Musicales', 'Religiosos', 'Eventuales']
+      .filter((name) => nombres.includes(name));
+    const restoEspana = nombres
+      .filter((n) => !oficiales.includes(n) && !generos.includes(n) && !isWorld(n))
+      .sort(orden);
+    const mundo = nombres.filter(isWorld).sort(orden);
+    return [...oficiales, ...generos, ...restoEspana, ...mundo];
+  }
+
   /** Canales en la forma reducida que consume el móvil. */
   channelsForPhone() {
     return this.getChannels().map((channel) => ({
@@ -244,8 +159,48 @@ class Remote {
     };
 
     const token = request.headers['x-clave'] || url.searchParams.get('k');
+    // El navegador pide el controlador de servicio sin la clave, así que es lo
+    // único que se sirve sin comprobarla. No contiene nada sensible.
+    if (request.method === 'GET' && url.pathname === '/sw.js') {
+      send(200, SERVICE_WORKER, 'application/javascript; charset=utf-8');
+      return;
+    }
+
     if (token !== this.token) {
       send(403, JSON.stringify({ error: 'clave incorrecta' }));
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/manifest.webmanifest') {
+      send(
+        200,
+        JSON.stringify({
+          name: 'Mando de Mundial TV',
+          short_name: 'Mando TV',
+          description: 'Cambia de canal en Mundial TV desde el teléfono.',
+          start_url: `/?k=${this.token}`,
+          scope: '/',
+          display: 'standalone',
+          background_color: '#0b0f14',
+          theme_color: '#0b0f14',
+          icons: [
+            { src: `/icono-192.png?k=${this.token}`, sizes: '192x192', type: 'image/png', purpose: 'any' },
+            { src: `/icono-512.png?k=${this.token}`, sizes: '512x512', type: 'image/png', purpose: 'any' },
+            { src: `/icono-512.png?k=${this.token}`, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          ],
+        }),
+        'application/manifest+json; charset=utf-8',
+      );
+      return;
+    }
+
+    const iconMatch = url.pathname.match(/^\/icono-(192|512)\.png$/);
+    if (request.method === 'GET' && iconMatch) {
+      try {
+        send(200, fs.readFileSync(path.join(RESOURCES, `mando-${iconMatch[1]}.png`)), 'image/png');
+      } catch {
+        send(404, JSON.stringify({ error: 'sin icono' }));
+      }
       return;
     }
 
@@ -255,7 +210,14 @@ class Remote {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/estado') {
-      send(200, JSON.stringify({ ...this.getState(), canales: this.channelsForPhone() }));
+      send(
+        200,
+        JSON.stringify({
+          ...this.getState(),
+          grupos: this.groupsForPhone(),
+          canales: this.channelsForPhone(),
+        }),
+      );
       return;
     }
 

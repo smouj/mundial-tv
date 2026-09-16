@@ -28,6 +28,10 @@ jobs:
     name: instalador de Windows
     needs: test
     runs-on: windows-latest
+    # Publicar la versión adjunta el instalador a la release, y eso necesita
+    # permiso de escritura sobre el contenido del repositorio.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

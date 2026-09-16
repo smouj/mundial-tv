@@ -918,8 +918,23 @@ function handleRemoteCommand(command) {
   publishRemoteState();
 }
 
+/**
+ * Abre un cuadro de diálogo apartando el vídeo oficial, que siempre se dibuja
+ * por encima de la página y lo dejaría tapado.
+ */
+function openSheet(dialog) {
+  window.mundial.setOfficialVisible(false);
+  dialog.addEventListener('close', () => window.mundial.setOfficialVisible(true), { once: true });
+  dialog.showModal();
+}
+
 async function openRemoteDialog() {
-  const info = await window.mundial.remoteInfo();
+  let info = null;
+  try {
+    info = await window.mundial.remoteInfo();
+  } catch {
+    info = null;
+  }
   dom.qrBox.textContent = '';
   dom.qrBox.hidden = false;
 
@@ -937,7 +952,7 @@ async function openRemoteDialog() {
     info && info.running
       ? 'Escanea el código con el móvil, o escribe la dirección en su navegador. El teléfono tiene que estar en la misma red Wi-Fi que este ordenador.'
       : 'El mando no ha podido arrancar. Puede que el puerto esté ocupado por otro programa.';
-  dom.remoteDialog.showModal();
+  openSheet(dom.remoteDialog);
 }
 
 /* --- Ajustes y diálogo --------------------------------------------------- */
@@ -1070,7 +1085,7 @@ function wireEvents() {
 
   dom.about.addEventListener('click', () => {
     updateFacts();
-    dom.aboutDialog.showModal();
+    openSheet(dom.aboutDialog);
   });
   dom.closeAbout.addEventListener('click', () => dom.aboutDialog.close());
   dom.openRepo.addEventListener('click', () => window.mundial.openExternal(state.info.repository));
@@ -1178,6 +1193,14 @@ function wireEvents() {
       return;
     }
     if (typing) return;
+
+    // El mando del móvil está a un atajo de distancia, en cualquier pantalla.
+    if (event.key === 'r' || event.key === 'R') {
+      event.preventDefault();
+      openRemoteDialog();
+      return;
+    }
+
     if (dom.playerView.hidden) return;
 
     switch (event.key) {

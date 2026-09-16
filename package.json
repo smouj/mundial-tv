@@ -37,6 +37,8 @@
     "files": [
       "src/**/*",
       "resources/canales.m3u",
+      "resources/mando-192.png",
+      "resources/mando-512.png",
       "build/icon.ico",
       "package.json"
     ],
