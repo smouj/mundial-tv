@@ -1,7 +1,7 @@
 {
   "name": "mundial-tv",
   "productName": "Mundial TV",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Reproductor de escritorio de television en directo de todo el mundo: rejilla de canales por pais y genero, HLS oficial con seleccion de calidad, audio y subtitulos, minirreproductor siempre visible y acceso a los canales que solo emiten desde su reproductor oficial.",
   "main": "src/main/main.js",
   "author": {
