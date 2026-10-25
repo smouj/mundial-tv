@@ -12,6 +12,8 @@
 const ALL = '__all__';
 const FEATURED = '__featured__';
 const FAVOURITES = '__favourites__';
+const RECENTS = '__recents__';
+const GUIDE = '__guide__';
 
 /** Orden curado de los canales que se ven al abrir la aplicación. */
 const FEATURED_ORDER = [
@@ -43,18 +45,25 @@ const ATTEMPT_TIMEOUT_MS = 14000;
 const state = {
   channels: [],
   meta: {},
+  programmes: [],
+  programmesByChannel: new Map(),
+  epgMeta: {},
+  updateStatus: null,
   favourites: new Set(),
   group: FEATURED,
   query: '',
   current: null,
   hls: null,
   sourceIndex: 0,
+  orderedSources: [],
+  currentSourceStartedAt: 0,
+  pendingSourceSuccess: null,
   attemptTimer: null,
   recovered: false,
   mini: false,
   resumed: false,
   pip: false,
-  settings: { volume: 1, muted: false, showInternational: false, resumeLast: true, lastChannelId: null },
+  settings: { volume: 1, muted: false, showInternational: false, resumeLast: true, lastChannelId: null, recentChannels: [], sourceHealth: {}, automaticUpdates: true },
 };
 
 const el = (id) => document.getElementById(id);
@@ -66,6 +75,9 @@ const dom = {
   playlistNote: el('playlist-note'),
   gridView: el('grid-view'),
   grid: el('grid'),
+  guideView: el('guide-view'),
+  guideRows: el('guide-rows'),
+  guideUpdated: el('guide-updated'),
   viewTitle: el('view-title'),
   viewSub: el('view-sub'),
   empty: el('empty'),
@@ -112,6 +124,7 @@ const dom = {
   factChrome: el('fact-chrome'),
   factChannels: el('fact-channels'),
   factUpdated: el('fact-updated'),
+  factEpg: el('fact-epg'),
   sheetAttribution: el('sheet-attribution'),
   nowPlaying: el('now-playing'),
   nowPlayingName: el('now-playing-name'),
@@ -132,6 +145,13 @@ const dom = {
   miniMessage: el('mini-message'),
   toast: el('toast'),
   toggleAds: el('toggle-ads'),
+  toggleUpdates: el('toggle-updates'),
+  diagnostics: el('btn-diagnostics'),
+  copyDiagnostics: el('btn-copy-diagnostics'),
+  refreshEpg: el('btn-refresh-epg'),
+  updateCheck: el('btn-check-updates'),
+  updateStatus: el('update-status'),
+  installUpdate: el('btn-install-update'),
 };
 
 /* --- Utilidades ---------------------------------------------------------- */
@@ -248,11 +268,14 @@ function buildGroupModel() {
 
   const favourites = pool.filter((channel) => state.favourites.has(channel.id));
   const featured = featuredChannels();
+  const recents = (state.settings.recentChannels || []).filter((id) => pool.some((channel) => channel.id === id));
 
   const shortcuts = [
     { id: FEATURED, name: 'Destacados', count: featured.length },
     { id: ALL, name: 'Todos los canales', count: pool.length },
+    { id: GUIDE, name: 'Guía TV', count: pool.length },
   ];
+  if (recents.length) shortcuts.push({ id: RECENTS, name: 'Vistos recientemente', count: recents.length });
   if (favourites.length) shortcuts.push({ id: FAVOURITES, name: 'Favoritos', count: favourites.length });
 
   const official = ['Atresmedia', 'Mediaset'].filter((name) => counts.has(name));
@@ -313,7 +336,45 @@ function renderSidebar() {
   else if (meta.source === 'cache' || meta.source === 'cache-stale') parts.push('lista en caché');
   else if (meta.source === 'snapshot') parts.push('lista incluida');
   if (meta.error) parts.push('sin conexión');
+  if (state.epgMeta && state.epgMeta.error) parts.push('guía sin conexión');
   dom.playlistNote.textContent = parts.join(' · ');
+}
+
+function scheduleFor(channelId, now = Date.now()) {
+  const programmes = state.programmesByChannel.get(String(channelId || '').toLowerCase()) || [];
+  const current = programmes.find((programme) => programme.start <= now && programme.stop > now) || null;
+  const next = programmes.find((programme) => programme.start >= (current ? current.stop : now)) || null;
+  return { current, next };
+}
+
+function programmeAt(channelId, timestamp) {
+  const programmes = state.programmesByChannel.get(String(channelId || '').toLowerCase()) || [];
+  const current = programmes.find((programme) => programme.start <= timestamp && programme.stop > timestamp) || null;
+  return { programme: current || programmes.find((programme) => programme.start >= timestamp) || null, current: Boolean(current) };
+}
+
+function timeOf(timestamp) {
+  return new Date(timestamp).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+}
+
+function appendProgrammeCard(parent, programme, current = false) {
+  const card = document.createElement('div');
+  card.className = `guide-program${current ? ' is-current' : ''}`;
+  const title = document.createElement('b');
+  title.textContent = programme ? programme.title : 'Sin información EPG';
+  const time = document.createElement('small');
+  time.textContent = programme ? `${timeOf(programme.start)}–${timeOf(programme.stop)}` : '—';
+  card.append(title, time);
+  if (current && programme) {
+    const progress = document.createElement('div');
+    progress.className = 'card-progress';
+    const fill = document.createElement('span');
+    const percent = Math.max(0, Math.min(100, ((Date.now() - programme.start) / (programme.stop - programme.start)) * 100));
+    fill.style.width = `${percent}%`;
+    progress.append(fill);
+    card.append(progress);
+  }
+  parent.append(card);
 }
 
 function makeCard(channel) {
@@ -362,6 +423,28 @@ function makeCard(channel) {
   meta.textContent =
     channel.kind === 'web' ? `${channel.group} · reproductor oficial` : channel.group;
 
+  const schedule = scheduleFor(channel.id);
+  const scheduleBox = document.createElement('div');
+  scheduleBox.className = 'card-schedule';
+  if (schedule.current) {
+    const current = document.createElement('span');
+    current.className = 'card-program';
+    current.textContent = `Ahora · ${timeOf(schedule.current.start)} ${schedule.current.title}`;
+    const progress = document.createElement('span');
+    progress.className = 'card-progress';
+    const fill = document.createElement('span');
+    fill.style.width = `${Math.max(0, Math.min(100, ((Date.now() - schedule.current.start) / (schedule.current.stop - schedule.current.start)) * 100))}%`;
+    progress.append(fill);
+    scheduleBox.append(current, progress);
+  }
+  if (schedule.next) {
+    const next = document.createElement('span');
+    next.className = 'card-program';
+    next.textContent = `Después · ${timeOf(schedule.next.start)} ${schedule.next.title}`;
+    scheduleBox.append(next);
+  }
+  if (!schedule.current && !schedule.next) scheduleBox.hidden = true;
+
   const fav = document.createElement('button');
   fav.type = 'button';
   fav.className = 'card-fav';
@@ -385,7 +468,7 @@ function makeCard(channel) {
     toggleFavourite(channel.id);
   });
 
-  card.append(art, name, meta, fav);
+  card.append(art, name, meta, scheduleBox, fav);
   card.addEventListener('click', () => play(channel));
   return card;
 }
@@ -418,6 +501,12 @@ function currentList() {
       return pool;
     case FAVOURITES:
       return pool.filter((channel) => state.favourites.has(channel.id));
+    case RECENTS: {
+      const recentIds = state.settings.recentChannels || [];
+      return recentIds.map((id) => pool.find((channel) => channel.id === id)).filter(Boolean);
+    }
+    case GUIDE:
+      return pool;
     default: {
       const group = state.group.replace(/^g:/, '');
       return pool.filter((channel) => channel.group === group);
@@ -428,6 +517,9 @@ function currentList() {
 function renderGrid() {
   const list = currentList();
   dom.grid.textContent = '';
+  const guideMode = state.group === GUIDE;
+  dom.grid.hidden = guideMode;
+  dom.guideView.hidden = !guideMode;
 
   const query = fold(state.query);
   if (query) {
@@ -436,15 +528,60 @@ function renderGrid() {
   } else {
     const model = buildGroupModel().flat.find((group) => group.id === state.group);
     dom.viewTitle.textContent = model ? model.name : 'Canales';
-    dom.viewSub.textContent = `${list.length} canales`;
+    dom.viewSub.textContent = guideMode ? 'Programación de ahora y las próximas horas' : `${list.length} canales`;
   }
 
-  const fragment = document.createDocumentFragment();
-  for (const channel of list) fragment.append(makeCard(channel));
-  dom.grid.append(fragment);
+  if (guideMode) renderGuide(list);
+  else {
+    const fragment = document.createDocumentFragment();
+    for (const channel of list) fragment.append(makeCard(channel));
+    dom.grid.append(fragment);
+  }
 
   dom.empty.hidden = list.length > 0;
   renderSidebar();
+}
+
+function renderGuide(channels) {
+  dom.guideRows.textContent = '';
+  const now = Date.now();
+  const firstHour = Math.floor(now / 3_600_000) * 3_600_000 + 3_600_000;
+  const slots = [now, firstHour, firstHour + 3_600_000, firstHour + 7_200_000];
+  const head = dom.guideView.querySelector('.guide-head');
+  head.textContent = '';
+  const labels = ['Canal', 'Ahora', ...slots.slice(1).map(timeOf)];
+  for (const label of labels) {
+    const column = document.createElement('span');
+    column.textContent = label;
+    head.append(column);
+  }
+  dom.guideUpdated.textContent = state.epgMeta.fetchedAt
+    ? `Guía actualizada ${formatDate(state.epgMeta.fetchedAt)} · horario local`
+    : state.epgMeta.error ? 'No se pudo cargar la guía. Puedes probar de nuevo desde Acerca de.' : 'Cargando la guía…';
+  const fragment = document.createDocumentFragment();
+  for (const channel of channels) {
+    const row = document.createElement('div');
+    row.className = 'guide-row';
+    const channelButton = document.createElement('button');
+    channelButton.type = 'button';
+    channelButton.className = 'guide-channel';
+    channelButton.textContent = channel.name;
+    channelButton.title = `${channel.name} · ${channel.group}`;
+    channelButton.addEventListener('click', () => play(channel));
+    row.append(channelButton);
+    for (const slot of slots) {
+      const atSlot = programmeAt(channel.id, slot);
+      appendProgrammeCard(row, atSlot.programme, atSlot.current);
+    }
+    fragment.append(row);
+  }
+  if (!channels.length) {
+    const empty = document.createElement('p');
+    empty.className = 'guide-empty';
+    empty.textContent = 'Ningún canal coincide con la búsqueda.';
+    fragment.append(empty);
+  }
+  dom.guideRows.append(fragment);
 }
 
 /* --- Favoritos ----------------------------------------------------------- */
@@ -517,6 +654,8 @@ function destroyHls() {
 async function play(channel) {
   state.current = channel;
   state.sourceIndex = 0;
+  state.orderedSources = [];
+  state.lastFailedSourceUrl = null;
   state.recovered = false;
   setMiniState(false);
 
@@ -530,7 +669,11 @@ async function play(channel) {
   document.title = `${channel.name} — Mundial TV`;
   updateFavButton();
 
-  await window.mundial.saveSettings({ lastChannelId: channel.id });
+  const recentChannels = [channel.id, ...(state.settings.recentChannels || []).filter((id) => id !== channel.id)].slice(0, 20);
+  state.settings.recentChannels = recentChannels;
+  await window.mundial.saveSettings({ lastChannelId: channel.id, recentChannels });
+  if (state.current !== channel) return;
+  renderSidebar();
   publishRemoteState();
 
   if (channel.kind === 'web') playOfficial(channel);
@@ -546,6 +689,7 @@ function playHls(channel) {
   dom.webHost.hidden = true;
 
   const sources = channel.sources || [];
+  state.orderedSources = sources;
   if (!sources.length) {
     showError('Este canal no tiene ninguna fuente disponible en este momento.', false);
     return;
@@ -554,14 +698,22 @@ function playHls(channel) {
 }
 
 function setSourceLabel(channel) {
-  const sources = channel.sources || [];
+  const sources = state.orderedSources.length ? state.orderedSources : channel.sources || [];
   const suffix = sources.length > 1 ? ` · ${state.sourceIndex + 1} de ${sources.length}` : '';
   dom.playerSub.textContent = `${channel.group}${suffix}`;
 }
 
 function attachSource(channel) {
   destroyHls();
-  const source = channel.sources[state.sourceIndex];
+  const sources = state.orderedSources.length ? state.orderedSources : channel.sources || [];
+  const source = sources[state.sourceIndex];
+  if (!source) {
+    showError('No quedan fuentes disponibles para este canal.', true);
+    return;
+  }
+  state.activeSourceUrl = source.url;
+  state.currentSourceStartedAt = Date.now();
+  state.pendingSourceSuccess = null;
   setSourceLabel(channel);
   showLoading('Conectando con el directo…');
 
@@ -577,8 +729,6 @@ function attachSource(channel) {
   state.attemptTimer = setTimeout(() => failover('timeout'), ATTEMPT_TIMEOUT_MS);
 
   hls.on(Hls.Events.MANIFEST_PARSED, () => {
-    clearTimeout(state.attemptTimer);
-    state.attemptTimer = null;
     clearStageMessage();
     populateTracks(hls);
     dom.video.play().catch(() => {
@@ -616,7 +766,15 @@ function attachSource(channel) {
 function failover(reason) {
   const channel = state.current;
   if (!channel) return;
-  const sources = channel.sources || [];
+  const sources = state.orderedSources.length ? state.orderedSources : channel.sources || [];
+  if (state.lastFailedSourceUrl === state.activeSourceUrl) return;
+  state.lastFailedSourceUrl = state.activeSourceUrl;
+  if (state.activeSourceUrl) {
+    window.mundial.recordSourceResult({ url: state.activeSourceUrl, result: 'failure' }).then((result) => {
+      if (result && result.ok) state.settings.sourceHealth = result.sourceHealth;
+    }).catch(() => {});
+  }
+  state.lastSourceFailure = { url: state.activeSourceUrl, reason: String(reason), at: Date.now() };
   const next = state.sourceIndex + 1;
 
   if (next < sources.length) {
@@ -635,6 +793,18 @@ function failover(reason) {
     messages[reason] || 'No se ha podido reproducir el canal con ninguna de sus fuentes.',
     true,
   );
+}
+
+function recordSourceSuccess() {
+  const url = state.activeSourceUrl;
+  if (!url || state.pendingSourceSuccess === url) return;
+  clearTimeout(state.attemptTimer);
+  state.attemptTimer = null;
+  state.pendingSourceSuccess = url;
+  const startupMs = Math.max(0, Date.now() - state.currentSourceStartedAt);
+  window.mundial.recordSourceResult({ url, result: 'success', startupMs }).then((result) => {
+    if (result && result.ok) state.settings.sourceHealth = result.sourceHealth;
+  }).catch(() => {});
 }
 
 function hasNativeHls() {
@@ -892,6 +1062,11 @@ function handleRemoteCommand(command) {
       if (target) play(target);
       break;
     }
+    case 'favorito':
+      if (typeof command.canalId === 'string' && state.channels.some((item) => item.id === command.canalId)) {
+        toggleFavourite(command.canalId);
+      }
+      break;
     case 'pausa':
       if (channel && channel.kind === 'web') window.mundial.controlOfficialPlayback('pausa');
       else dom.video.pause();
@@ -985,6 +1160,22 @@ function applyCatalogue(snapshot) {
   resumeLastChannel();
 }
 
+function applyEpg(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.programmes)) return;
+  state.programmes = snapshot.programmes;
+  state.epgMeta = snapshot.meta || {};
+  state.programmesByChannel = new Map();
+  for (const programme of state.programmes) {
+    const id = String(programme.channelId || '').toLowerCase();
+    if (!id) continue;
+    let list = state.programmesByChannel.get(id);
+    if (!list) state.programmesByChannel.set(id, (list = []));
+    list.push(programme);
+  }
+  renderGrid();
+  updateFacts();
+}
+
 /**
  * Vuelve al último canal visto, una sola vez y solo cuando hay canales de
  * verdad en la lista.
@@ -1000,10 +1191,65 @@ function resumeLastChannel() {
 function updateFacts() {
   dom.factChannels.textContent = String(state.channels.length);
   dom.factUpdated.textContent = formatDate(state.meta.fetchedAt);
+  dom.factEpg.textContent = state.epgMeta.fetchedAt
+    ? `${formatDate(state.epgMeta.fetchedAt)} · ${state.epgMeta.count || state.programmes.length} programas`
+    : state.epgMeta.error ? 'Sin conexión' : 'Cargando…';
   dom.toggleInt.checked = Boolean(state.settings.showInternational);
   dom.toggleAds.checked = Boolean(state.settings.skipAds);
+  dom.toggleUpdates.checked = state.settings.automaticUpdates !== false;
   dom.sheetAttribution.textContent =
     'Las direcciones de los canales proceden del proyecto TDTChannels (LaQuay), publicado bajo licencia Apache-2.0. Antena 3, laSexta, Telecinco, Cuatro y sus canales temáticos se ven desde sus reproductores oficiales. El salto de anuncios no bloquea publicidad: solo pulsa el botón que la propia web ofrece. La aplicación no aloja ni retransmite ningún contenido.';
+}
+
+function updateUpdateStatus(status) {
+  if (!status || typeof status !== 'object') return;
+  const messages = {
+    idle: 'Las actualizaciones se comprobarán al abrir la aplicación.',
+    checking: 'Buscando actualizaciones…',
+    current: 'Tienes la versión más reciente.',
+    available: `Hay una nueva versión${status.version ? ` (${status.version})` : ''}. Se está descargando en segundo plano.`,
+    downloading: `Descargando actualización… ${Number(status.progress) || 0} %`,
+    downloaded: `La versión ${status.version || 'nueva'} está lista para instalarse.`,
+    error: `No se pudo comprobar la actualización${status.error ? `: ${status.error}` : '.'}`,
+    disabled: 'La búsqueda automática de actualizaciones está desactivada.',
+    development: 'Las actualizaciones se habilitan en las versiones instaladas.',
+  };
+  dom.updateStatus.textContent = messages[status.status] || 'Estado de actualización desconocido.';
+  dom.installUpdate.hidden = status.status !== 'downloaded';
+}
+
+function buildDiagnostics() {
+  const sourceHealth = state.settings.sourceHealth || {};
+  const sources = [];
+  for (const channel of state.channels) {
+    for (const source of channel.sources || []) {
+      const record = sourceHealth[source.healthKey];
+      if (!record) continue;
+      let host = 'desconocido';
+      try { host = new URL(source.url).host; } catch { /* URL malformada */ }
+      sources.push({
+        canal: channel.name,
+        grupo: channel.group,
+        host,
+        puntuacion: window.MundialSourceHealth.sourceScore(record),
+        exitos: record.successes,
+        fallos: record.failures,
+        inicioMedioMs: record.avgStartMs,
+        ultimoExito: record.lastSuccessAt,
+        ultimoFallo: record.lastFailureAt,
+      });
+    }
+  }
+  sources.sort((a, b) => a.puntuacion - b.puntuacion);
+  return {
+    app: { version: state.info.version, electron: state.info.electron, chromium: state.info.chrome, plataforma: state.info.platform },
+    lista: { origen: state.meta.source || 'sin datos', actualizada: state.meta.fetchedAt || null, canales: state.channels.length, error: state.meta.error || null },
+    guia: { origen: state.epgMeta.source || 'sin datos', actualizada: state.epgMeta.fetchedAt || null, programas: state.epgMeta.count || state.programmes.length, error: state.epgMeta.error || null },
+    actualizacion: { estado: state.updateStatus && state.updateStatus.status || 'desconocido', version: state.updateStatus && state.updateStatus.version || null },
+    ultimoFalloDeFuente: state.lastSourceFailure ? { motivo: state.lastSourceFailure.reason, hora: state.lastSourceFailure.at } : null,
+    fuentesConHistorial: sources.slice(0, 25),
+    privacidad: 'Este informe se genera y copia localmente. No se envía automáticamente.',
+  };
 }
 
 async function applyVolume() {
@@ -1117,6 +1363,37 @@ function wireEvents() {
     );
   });
 
+  dom.toggleUpdates.addEventListener('change', async () => {
+    state.settings.automaticUpdates = dom.toggleUpdates.checked;
+    await window.mundial.saveSettings({ automaticUpdates: state.settings.automaticUpdates });
+    if (state.settings.automaticUpdates) updateUpdateStatus(await window.mundial.checkUpdates());
+    else updateUpdateStatus({ status: 'disabled' });
+  });
+
+  dom.refreshEpg.addEventListener('click', async () => {
+    dom.refreshEpg.disabled = true;
+    applyEpg(await window.mundial.refreshEpg());
+    dom.refreshEpg.disabled = false;
+    showToast(state.epgMeta.error ? 'No se pudo actualizar la guía.' : 'Guía actualizada.');
+  });
+
+  dom.updateCheck.addEventListener('click', async () => {
+    dom.updateCheck.disabled = true;
+    updateUpdateStatus(await window.mundial.checkUpdates());
+    dom.updateCheck.disabled = false;
+  });
+
+  dom.installUpdate.addEventListener('click', () => window.mundial.installUpdate());
+
+  dom.diagnostics.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(buildDiagnostics(), null, 2));
+      showToast('Diagnóstico copiado. Solo incluye información local de la aplicación.');
+    } catch {
+      showToast('No se pudo copiar el diagnóstico.');
+    }
+  });
+
   dom.toggleInt.addEventListener('change', async () => {
     state.settings.showInternational = dom.toggleInt.checked;
     await window.mundial.saveSettings({ showInternational: state.settings.showInternational });
@@ -1134,6 +1411,7 @@ function wireEvents() {
     dom.iconPause.hidden = false;
     publishRemoteState();
   });
+  dom.video.addEventListener('playing', recordSourceSuccess);
   dom.video.addEventListener('pause', () => {
     dom.iconPlay.hidden = false;
     dom.iconPause.hidden = true;
@@ -1179,6 +1457,7 @@ function wireEvents() {
     if (state.current.kind === 'web') playOfficial(state.current);
     else {
       state.sourceIndex = 0;
+      state.lastFailedSourceUrl = null;
       state.recovered = false;
       attachSource(state.current);
     }
@@ -1186,8 +1465,15 @@ function wireEvents() {
 
   dom.nextSource.addEventListener('click', () => {
     if (state.current) {
-      state.sourceIndex = 0;
-      playHls(state.current);
+      if (state.sourceIndex + 1 < state.orderedSources.length) {
+        state.sourceIndex += 1;
+        state.lastFailedSourceUrl = null;
+        attachSource(state.current);
+      } else {
+        state.sourceIndex = 0;
+        state.lastFailedSourceUrl = null;
+        playHls(state.current);
+      }
     }
   });
 
@@ -1254,6 +1540,7 @@ async function boot() {
   state.settings = { ...state.settings, ...((await window.mundial.settings()) || {}) };
   state.favourites = new Set(state.settings.favourites || []);
   state.info = await window.mundial.info();
+  state.updateStatus = state.info.updates || null;
 
   dom.volume.value = String(state.settings.volume ?? 1);
 
@@ -1264,10 +1551,22 @@ async function boot() {
   wireEvents();
   watchWebBounds();
 
-  const snapshot = await window.mundial.channels();
+  const [snapshot, epgSnapshot, updateStatus] = await Promise.all([
+    window.mundial.channels(),
+    window.mundial.epg(),
+    window.mundial.updateStatus(),
+  ]);
   applyCatalogue(snapshot);
+  applyEpg(epgSnapshot);
+  state.updateStatus = updateStatus || state.updateStatus;
+  updateUpdateStatus(state.updateStatus);
 
   window.mundial.onCatalogue((payload) => applyCatalogue(payload));
+  window.mundial.onEpg((payload) => applyEpg(payload));
+  window.mundial.onUpdateStatus((payload) => {
+    state.updateStatus = payload;
+    updateUpdateStatus(payload);
+  });
   window.mundial.onMiniChange((payload) => setMiniState(Boolean(payload && payload.active)));
   window.mundial.onRemoteCommand((command) => handleRemoteCommand(command));
   window.mundial.onAdSkipped((payload) => {
@@ -1276,6 +1575,55 @@ async function boot() {
   });
 
   await applyVolume();
+
+  if (state.info.testMode) {
+    class FakeHls {
+      static Events = { MANIFEST_PARSED: 'manifestParsed', LEVEL_SWITCHED: 'levelSwitched', ERROR: 'error' };
+      static ErrorTypes = { MEDIA_ERROR: 'mediaError' };
+      static isSupported() { return true; }
+      constructor() { this.listeners = new Map(); this.levels = []; this.audioTracks = []; this.subtitleTracks = []; }
+      on(event, listener) {
+        const list = this.listeners.get(event) || [];
+        list.push(listener);
+        this.listeners.set(event, list);
+      }
+      emit(event, ...args) { for (const listener of this.listeners.get(event) || []) listener(event, ...args); }
+      loadSource() { queueMicrotask(() => this.emit(FakeHls.Events.MANIFEST_PARSED)); }
+      attachMedia() {}
+      destroy() { this.listeners.clear(); }
+      get autoLevelEnabled() { return true; }
+      get currentLevel() { return -1; }
+      set currentLevel(_value) {}
+    }
+    window.__MUNDIAL_TEST__ = Object.freeze({
+      installPlayerMock() {
+        window.Hls = FakeHls;
+        dom.video.play = () => {
+          Object.defineProperty(dom.video, 'paused', { configurable: true, value: false });
+          dom.video.dispatchEvent(new Event('playing'));
+          dom.video.dispatchEvent(new Event('play'));
+          return Promise.resolve();
+        };
+        dom.video.pause = () => {
+          Object.defineProperty(dom.video, 'paused', { configurable: true, value: true });
+          dom.video.dispatchEvent(new Event('pause'));
+        };
+      },
+      setChannels(channels) {
+        state.channels = channels;
+        state.group = ALL;
+        renderGrid();
+      },
+      snapshot() {
+        return {
+          current: state.current ? state.current.id : null,
+          playing: Boolean(state.current && state.current.kind === 'hls' && !dom.video.paused),
+          title: dom.playerTitle.textContent,
+          errorVisible: !dom.stageMessage.hidden && !dom.stage.classList.contains('is-loading'),
+        };
+      },
+    });
+  }
 
   resumeLastChannel();
 }

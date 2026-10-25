@@ -177,6 +177,13 @@ svg {
   color: var(--text);
 }
 
+.ghost-btn:active,
+.primary-btn:active,
+.ctrl-btn:active,
+.group-btn:active {
+  transform: scale(0.97);
+}
+
 .ghost-btn.wide {
   width: auto;
   padding: 0 12px;
@@ -356,8 +363,11 @@ svg {
 .card:hover {
   background: var(--surface-2);
   border-color: var(--border);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16);
 }
+
+.card:active { transform: translateY(0) scale(0.995); }
 
 .card:focus-visible {
   outline: 2px solid var(--accent);
@@ -404,6 +414,44 @@ svg {
   text-overflow: ellipsis;
 }
 
+.card-schedule {
+  display: grid;
+  gap: 4px;
+  margin-top: 1px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-soft);
+  min-width: 0;
+}
+
+.card-program {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-program b {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.card-progress {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+
+.card-progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.35s linear;
+}
+
 .card-fav {
   position: absolute;
   top: 7px;
@@ -419,7 +467,7 @@ svg {
   color: var(--muted);
   opacity: 0;
   cursor: pointer;
-  transition: opacity 0.12s ease, color 0.12s ease;
+  transition: opacity 0.14s ease, color 0.14s ease, transform 0.16s ease;
 }
 
 .card:hover .card-fav,
@@ -433,6 +481,7 @@ svg {
 
 .card-fav.is-on {
   color: var(--accent);
+  animation: favorite-pop 0.22s ease-out;
 }
 
 .card-fav svg[data-filled="true"] {
@@ -716,6 +765,9 @@ svg {
   background: rgba(4, 7, 10, 0.62);
 }
 
+.sheet[open] { animation: sheet-in 0.16s ease-out both; }
+.sheet[open]::backdrop { animation: backdrop-in 0.16s ease-out both; }
+
 .sheet-head {
   display: flex;
   align-items: center;
@@ -782,7 +834,75 @@ svg {
 .sheet-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
+
+.extra-actions { margin-top: 9px; }
+
+.guide-view {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 0 22px 22px;
+}
+
+.guide-head,
+.guide-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.8fr) repeat(4, minmax(160px, 1fr));
+  align-items: center;
+  gap: 10px;
+  min-width: 820px;
+}
+
+.guide-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 9px 12px;
+  background: var(--bg);
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.guide-row {
+  min-height: 74px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.guide-channel {
+  overflow: hidden;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.guide-channel:hover { color: var(--accent); }
+
+.guide-program {
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+
+.guide-program.is-current { border-color: rgba(240, 165, 60, 0.4); }
+.guide-program b,
+.guide-program small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guide-program b { font-size: 11.5px; font-weight: 500; }
+.guide-program small { color: var(--muted); font-size: 10px; }
+.guide-empty { padding: 12px; color: var(--muted); }
 
 /* --- Barra de «sigue en marcha» ------------------------------------------ */
 
@@ -878,6 +998,34 @@ svg {
   border-radius: 999px;
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4);
   z-index: 40;
+  animation: toast-in 0.18s ease-out both;
+}
+
+@keyframes favorite-pop {
+  0% { transform: scale(0.88); }
+  70% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+@keyframes sheet-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 5px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (max-width: 800px) {
+  .guide-head,
+  .guide-row { grid-template-columns: minmax(100px, 0.6fr) repeat(4, minmax(145px, 1fr)); }
+  .guide-view { padding-left: 12px; padding-right: 12px; }
 }
 
 .ghost-btn.is-on svg {
@@ -900,4 +1048,13 @@ svg {
 ::-webkit-scrollbar-thumb:hover {
   background: #2c3b4c;
   background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

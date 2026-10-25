@@ -5,8 +5,8 @@
  *
  * Es una única página autocontenida, sin bibliotecas, pensada para verse bien
  * en cualquier móvil: cabecera con lo que suena, controles grandes y lista de
- * canales con sus logotipos. Nada de aquí sale a internet: solo habla con el
- * servidor que la sirve, que vive en la red local.
+ * canales con sus logotipos. Las órdenes se envían al servidor de la red local;
+ * los logotipos HTTPS, si existen, se cargan directamente desde su origen.
  *
  * @param {string} token clave de esta sesión, que viaja en la dirección
  * @returns {string} HTML completo
@@ -42,7 +42,7 @@ function mobilePage(token) {
     --ok: #46c07a;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; }
+  html, body { width: 100%; max-width: 100%; margin: 0; overflow-x: hidden; }
   body {
     background: var(--bg);
     color: var(--text);
@@ -50,12 +50,14 @@ function mobilePage(token) {
     padding-bottom: calc(20px + env(safe-area-inset-bottom));
     overscroll-behavior-y: contain;
   }
-  button { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; cursor: pointer; }
-  button:active { background: var(--surface-2); }
+  button { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; cursor: pointer; transition: transform 0.12s ease, background-color 0.14s ease, border-color 0.14s ease, filter 0.14s ease; }
+  button:active { background: var(--surface-2); transform: scale(0.98); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
   /* --- cabecera --- */
   header {
     position: sticky; top: 0; z-index: 10;
+    width: 100%; min-width: 0;
     padding: calc(10px + env(safe-area-inset-top)) 14px 12px;
     background: rgba(14, 20, 27, 0.94);
     backdrop-filter: blur(14px);
@@ -81,13 +83,18 @@ function mobilePage(token) {
 
   .ahora {
     display: flex; align-items: center; gap: 12px;
+    width: 100%; min-width: 0;
     margin-top: 12px; padding: 10px 12px;
     background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    transition: border-color 0.18s ease, background-color 0.18s ease;
   }
-  .ahora .texto { min-width: 0; flex: 1; }
+  .ahora .texto { min-width: 0; flex: 1 1 0; overflow: hidden; }
   .ahora .texto b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ahora .texto small { color: var(--muted); font-size: 12px; }
+  .ahora .texto small { display: block; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
   .ahora.sonando .texto small { color: var(--text-soft); }
+  .ahora .epg { margin-top: 3px; color: var(--text-soft); font-size: 12px; }
+  .progreso { height: 3px; margin-top: 7px; overflow: hidden; border-radius: 99px; background: var(--border); }
+  .progreso span { display: block; height: 100%; background: var(--accent); transition: width 0.6s linear; }
 
   .logo {
     width: 46px; height: 34px; flex: none; border-radius: 8px;
@@ -98,14 +105,14 @@ function mobilePage(token) {
 
   /* Los botones comparten fila y el volumen va debajo: así nada se sale del
      ancho del teléfono por muy estrecho que sea. */
-  .mandos { display: flex; gap: 9px; margin-top: 11px; }
-  .mandos button { flex: 1 1 0; min-width: 0; height: 46px; padding: 0 10px; font-weight: 600; }
+  .mandos { display: flex; width: 100%; min-width: 0; gap: 9px; margin-top: 11px; }
+  .mandos button { flex: 1 1 0; width: 0; min-width: 0; height: 46px; padding: 0 10px; font-weight: 600; }
   .mandos button.principal { background: var(--accent); border-color: var(--accent); color: #241704; }
   .mandos button.principal:active { filter: brightness(0.92); }
   .mandos button[disabled] { opacity: 0.45; }
-  .volumen { display: flex; align-items: center; gap: 9px; margin-top: 11px; }
+  .volumen { display: flex; align-items: center; width: 100%; min-width: 0; gap: 9px; margin-top: 11px; }
   .volumen svg { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-  .volumen input { flex: 1 1 auto; width: 100%; min-width: 0; accent-color: var(--accent); height: 34px; }
+  .volumen input { flex: 1 1 0; width: 0; min-width: 0; accent-color: var(--accent); height: 34px; }
   .volumen output { flex: none; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; width: 34px; text-align: right; }
 
   /* --- buscador y filtros --- */
@@ -131,7 +138,7 @@ function mobilePage(token) {
   li {
     display: flex; align-items: center; gap: 12px;
     padding: 9px 10px; border-radius: 12px; cursor: pointer;
-    transition: background 0.12s ease;
+    transition: background 0.14s ease, box-shadow 0.14s ease;
   }
   li:active { background: var(--surface-2); }
   li.on { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
@@ -139,8 +146,20 @@ function mobilePage(token) {
   li .meta { min-width: 0; flex: 1; }
   li .meta b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   li .meta small { color: var(--muted); font-size: 12px; }
+  li .meta small.programa { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  li .favorito { flex: none; width: 34px; height: 34px; border: 0; background: transparent; color: var(--muted); font-size: 21px; transition: color 0.14s ease, transform 0.16s ease; }
+  li .favorito.activo { color: var(--accent); animation: favorito-pop 0.22s ease-out; }
   li .marca-vivo { width: 7px; height: 7px; border-radius: 50%; background: var(--live); flex: none; }
   .vacio { padding: 26px 14px; text-align: center; color: var(--muted); }
+
+  @keyframes favorito-pop {
+    0% { transform: scale(0.88); }
+    70% { transform: scale(1.12); }
+    100% { transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  }
 </style>
 </head>
 <body>
@@ -156,6 +175,8 @@ function mobilePage(token) {
     <div class="texto">
       <b id="ahora-nombre">Nada en el ordenador</b>
       <small id="ahora-sub">Toca un canal para ponerlo</small>
+      <small class="epg" id="ahora-epg"></small>
+      <div class="progreso" id="ahora-progreso" hidden><span id="ahora-progreso-barra"></span></div>
     </div>
   </div>
 
@@ -185,6 +206,7 @@ function mobilePage(token) {
   var actual = null;
   var reproduciendo = false;
   var filtroGrupo = '';
+  var soloFavoritos = false;
   var firma = '';
   var pidiendo = false;
   var vivo = true;
@@ -253,6 +275,7 @@ function mobilePage(token) {
   function visibles() {
     var texto = (el('q').value || '').toLowerCase();
     return canales.filter(function (c) {
+      if (soloFavoritos && !c.favorito) return false;
       if (filtroGrupo && c.grupo !== filtroGrupo) return false;
       if (!texto) return true;
       return c.nombre.toLowerCase().indexOf(texto) >= 0 || c.grupo.toLowerCase().indexOf(texto) >= 0;
@@ -260,19 +283,27 @@ function mobilePage(token) {
   }
 
   function pintarChips() {
-    if (el('chips').childElementCount === grupos.length + 1) return;
     el('chips').textContent = '';
     var todos = document.createElement('button');
-    todos.className = 'chip' + (filtroGrupo ? '' : ' activo');
+    todos.className = 'chip' + (!filtroGrupo && !soloFavoritos ? ' activo' : '');
     todos.textContent = 'Todos';
-    todos.addEventListener('click', function () { filtroGrupo = ''; firma = ''; pintar(); });
+    todos.addEventListener('click', function () { filtroGrupo = ''; soloFavoritos = false; firma = ''; pintar(); });
     el('chips').appendChild(todos);
+
+    if (canales.some(function (canal) { return canal.favorito; })) {
+      var favoritos = document.createElement('button');
+      favoritos.className = 'chip' + (soloFavoritos ? ' activo' : '');
+      favoritos.textContent = 'Favoritos';
+      favoritos.addEventListener('click', function () { filtroGrupo = ''; soloFavoritos = !soloFavoritos; firma = ''; pintar(); });
+      el('chips').appendChild(favoritos);
+    }
 
     grupos.forEach(function (nombre) {
       var chip = document.createElement('button');
       chip.className = 'chip' + (filtroGrupo === nombre ? ' activo' : '');
       chip.textContent = nombre;
       chip.addEventListener('click', function () {
+        soloFavoritos = false;
         filtroGrupo = filtroGrupo === nombre ? '' : nombre;
         firma = '';
         pintar();
@@ -298,9 +329,25 @@ function mobilePage(token) {
       grupo.textContent = canal.grupo;
       meta.appendChild(nombre);
       meta.appendChild(grupo);
+      if (canal.ahora || canal.despues) {
+        var programa = document.createElement('small');
+        programa.className = 'programa';
+        programa.textContent = (canal.ahora ? 'Ahora: ' + canal.ahora : '') + (canal.despues ? ' · Después: ' + canal.despues : '');
+        meta.appendChild(programa);
+      }
 
       fila.appendChild(crearLogo(canal));
       fila.appendChild(meta);
+      var favorito = document.createElement('button');
+      favorito.type = 'button';
+      favorito.className = 'favorito' + (canal.favorito ? ' activo' : '');
+      favorito.textContent = canal.favorito ? '★' : '☆';
+      favorito.setAttribute('aria-label', canal.favorito ? 'Quitar de favoritos' : 'Añadir a favoritos');
+      favorito.addEventListener('click', function (event) {
+        event.stopPropagation();
+        comando('favorito', { canalId: canal.id }).then(refrescar).catch(function () { marcarEstado(false); });
+      });
+      fila.appendChild(favorito);
       if (canal.id === actual) {
         var punto = document.createElement('span');
         punto.className = 'marca-vivo';
@@ -340,10 +387,15 @@ function mobilePage(token) {
       el('ahora-logo').appendChild(crearLogo(canal));
       el('ahora-nombre').textContent = canal.nombre;
       el('ahora-sub').textContent = (reproduciendo ? 'En directo' : 'En pausa') + ' · ' + canal.grupo;
+      el('ahora-epg').textContent = canal.ahora ? 'Ahora: ' + canal.ahora + (canal.despues ? ' · Después: ' + canal.despues : '') : '';
+      el('ahora-progreso').hidden = canal.progreso === null || canal.progreso === undefined;
+      el('ahora-progreso-barra').style.width = (canal.progreso || 0) + '%';
     } else {
       el('ahora-logo').textContent = '–';
       el('ahora-nombre').textContent = 'Nada en el ordenador';
       el('ahora-sub').textContent = 'Toca un canal para ponerlo';
+      el('ahora-epg').textContent = '';
+      el('ahora-progreso').hidden = true;
     }
 
     el('btn-play').textContent = reproduciendo ? 'Pausa' : 'Reproducir';
@@ -353,7 +405,7 @@ function mobilePage(token) {
 
   function pintar() {
     var lista = visibles();
-    var marca = filtroGrupo + '|' + el('q').value + '|' + actual + '|' + lista.length;
+    var marca = filtroGrupo + '|' + soloFavoritos + '|' + el('q').value + '|' + actual + '|' + lista.length + '|' + canales.map(function (canal) { return canal.favorito; }).join('');
     pintarChips();
     pintarAhora();
     if (marca === firma) return;

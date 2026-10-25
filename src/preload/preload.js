@@ -9,8 +9,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('mundial', {
   channels: () => ipcRenderer.invoke('channels:list'),
   refresh: () => ipcRenderer.invoke('channels:refresh'),
+  epg: () => ipcRenderer.invoke('epg:get'),
+  refreshEpg: () => ipcRenderer.invoke('epg:refresh'),
   settings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (changes) => ipcRenderer.invoke('settings:set', changes),
+  recordSourceResult: (payload) => ipcRenderer.invoke('source-health:record', payload),
   info: () => ipcRenderer.invoke('app:info'),
   openOfficial: (payload) => ipcRenderer.invoke('official:open', payload),
   updateOfficialBounds: (bounds) => ipcRenderer.invoke('official:bounds', bounds),
@@ -26,6 +29,9 @@ contextBridge.exposeInMainWorld('mundial', {
   openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
   remoteInfo: () => ipcRenderer.invoke('remote:info'),
   rotateRemote: () => ipcRenderer.invoke('remote:rotate'),
+  updateStatus: () => ipcRenderer.invoke('updates:status'),
+  checkUpdates: () => ipcRenderer.invoke('updates:check'),
+  installUpdate: () => ipcRenderer.invoke('updates:install'),
   publishRemoteState: (state) => ipcRenderer.send('remote:state', state),
   controlOfficialPlayback: (action, value) => ipcRenderer.invoke('official:control', action, value),
   onRemoteCommand: (listener) => {
@@ -33,5 +39,11 @@ contextBridge.exposeInMainWorld('mundial', {
   },
   onCatalogue: (listener) => {
     ipcRenderer.on('channels:updated', (_event, payload) => listener(payload));
+  },
+  onEpg: (listener) => {
+    ipcRenderer.on('epg:updated', (_event, payload) => listener(payload));
+  },
+  onUpdateStatus: (listener) => {
+    ipcRenderer.on('updates:status', (_event, payload) => listener(payload));
   },
 });

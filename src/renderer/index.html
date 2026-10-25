@@ -71,6 +71,11 @@
           </div>
 
           <div class="grid" id="grid"></div>
+          <section class="guide-view" id="guide-view" hidden aria-label="Guía de programación">
+            <p class="guide-updated" id="guide-updated"></p>
+            <div class="guide-head"><span>Canal</span><span>Ahora</span><span>—</span><span>—</span><span>—</span></div>
+            <div class="guide-rows" id="guide-rows"></div>
+          </section>
           <p class="empty" id="empty" hidden>Ningún canal coincide con la búsqueda.</p>
         </div>
 
@@ -181,6 +186,7 @@
           <div><dt>Chromium</dt><dd id="fact-chrome">—</dd></div>
           <div><dt>Canales disponibles</dt><dd id="fact-channels">—</dd></div>
           <div><dt>Lista actualizada</dt><dd id="fact-updated">—</dd></div>
+          <div><dt>Guía EPG</dt><dd id="fact-epg">—</dd></div>
         </dl>
 
         <label class="check">
@@ -192,12 +198,24 @@
           <input type="checkbox" id="toggle-ads" />
           <span>Pulsar el botón de saltar anuncio en cuanto el reproductor oficial lo muestre</span>
         </label>
+        <label class="check">
+          <input type="checkbox" id="toggle-updates" />
+          <span>Buscar y descargar actualizaciones al abrir la aplicación</span>
+        </label>
+
+        <p class="sheet-note" id="update-status" role="status">Actualizaciones automáticas preparadas para las versiones publicadas en GitHub.</p>
 
         <p class="sheet-note" id="sheet-attribution"></p>
 
         <div class="sheet-actions">
           <button class="primary-btn" id="btn-open-repo">Ver el proyecto en GitHub</button>
           <button class="ghost-btn wide" id="btn-refresh-2">Actualizar lista de canales</button>
+        </div>
+        <div class="sheet-actions extra-actions">
+          <button class="ghost-btn wide" id="btn-refresh-epg">Actualizar guía</button>
+          <button class="ghost-btn wide" id="btn-check-updates">Buscar actualizaciones</button>
+          <button class="primary-btn" id="btn-install-update" hidden>Instalar y reiniciar</button>
+          <button class="ghost-btn wide" id="btn-diagnostics">Copiar diagnóstico local</button>
         </div>
       </div>
     </dialog>
@@ -224,6 +242,7 @@
 
     <div class="toast" id="toast" role="status" hidden></div>
 
+    <script src="../main/source-health.js"></script>
     <script src="vendor/hls.min.js"></script>
     <script src="app.js"></script>
   </body>

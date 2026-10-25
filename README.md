@@ -11,7 +11,7 @@ Rejilla de canales, reproductor propio con calidad y subtítulos, minirreproduct
 [![Licencia](https://img.shields.io/badge/licencia-MIT-2f8f46?style=flat-square)](LICENSE)
 [![Plataforma](https://img.shields.io/badge/Windows-10%20%7C%2011%20x64-1f6feb?style=flat-square)](#instalación)
 [![Electron](https://img.shields.io/badge/Electron-44-47848f?style=flat-square)](https://www.electronjs.org)
-[![Pruebas](https://img.shields.io/badge/pruebas-21%20en%20verde-2f8f46?style=flat-square)](#desarrollo)
+[![Pruebas](https://img.shields.io/badge/pruebas-58-2f8f46?style=flat-square)](#desarrollo)
 [![Compilación](https://github.com/smouj/mundial-tv/actions/workflows/build.yml/badge.svg)](https://github.com/smouj/mundial-tv/actions/workflows/build.yml)
 [![Última versión](https://img.shields.io/github/v/release/smouj/mundial-tv?style=flat-square&label=descarga&color=f0a53c)](https://github.com/smouj/mundial-tv/releases)
 
@@ -47,6 +47,11 @@ Mundial TV es una aplicación de escritorio para ver televisión en directo desd
 - **Minirreproductor siempre visible**, por encima del resto de ventanas, para seguir viéndolo mientras haces cualquier otra cosa.
 - **Mando desde el móvil.** Un código QR abre en el teléfono una página para cambiar de canal, pausar y ajustar el volumen. Se puede añadir a su pantalla de inicio y queda como una aplicación con su propio icono.
 - **Favoritos**, búsqueda instantánea y memoria del último canal visto.
+- **Guía de programación** con «Ahora» y «Después» en las tarjetas, progreso del programa actual y una vista completa por canal.
+- **Historial de canales recientes**, guardado solo en el equipo.
+- **Failover con aprendizaje local.** La aplicación prioriza las fuentes que han arrancado mejor en ese ordenador y conserva sus resultados en las preferencias locales.
+- **Actualizaciones automáticas** desde GitHub Releases, con aviso antes de reiniciar para instalar.
+- **Diagnóstico local**, listo para copiar cuando una fuente o la guía fallen.
 - **Copia local de la lista**, para que la aplicación abra con contenido incluso sin conexión en ese momento.
 
 ## Capturas
@@ -99,6 +104,7 @@ Pulsa el botón del teléfono, en la barra superior —o la tecla `R`— y apare
 - Sirve **cualquier teléfono**: es una página web normal, no hay que instalar nada.
 - El teléfono tiene que estar en **la misma red Wi-Fi** que el ordenador.
 - Desde esa página se cambia de canal, se pausa, se para y se regula el volumen. Mientras eliges, el ordenador cambia al instante.
+- La tarjeta de lo que se está viendo muestra el programa actual y el siguiente. También puedes marcar favoritos desde el teléfono.
 - Se puede **añadir a la pantalla de inicio**: en Android, menú del navegador → *Añadir a pantalla de inicio*; en iPhone, *Compartir* → *Añadir a pantalla de inicio*. Queda con el icono de la aplicación y abre a pantalla completa.
 - **La dirección no cambia entre arranques.** El móvil que ya la tenga guardada —o el icono de su pantalla de inicio— sigue funcionando sin volver a escanear nada. Si quieres cortarle el acceso a un teléfono, el botón **Clave nueva** invalida la dirección anterior y muestra otro código.
 
@@ -116,6 +122,9 @@ Pulsa el botón del teléfono, en la barra superior —o la tecla `R`— y apare
 4. Los canales que solo emiten desde su web oficial se muestran en una vista incrustada de nivel superior, con su propia sesión y sus propias cookies. Esa misma vista se aparta mientras hay un cuadro de diálogo abierto, porque se dibuja siempre por encima de la página y si no lo taparía.
 5. El salto de anuncios **no bloquea ni elimina publicidad**: únicamente busca el botón que la propia web ofrece —«Saltar anuncio», «Omitir», «Skip»— y lo pulsa en cuanto aparece.
 6. El mando es un servidor web mínimo dentro del proceso principal. Solo escucha en la red local, exige la clave de la sesión y no expone nada más que la lista de canales y el estado de reproducción.
+7. La guía EPG de TDTChannels se descarga y guarda en caché en el equipo. Se compara su identificador con `tvg-id`; si no hay datos para un canal, sigue visible sin programación.
+8. La puntuación de las fuentes se guarda en las preferencias locales y no se envía a ningún servidor.
+9. Las actualizaciones consultan GitHub Releases en la versión instalada mientras la opción esté activa. Se descargan en segundo plano y requieren pulsar **Instalar y reiniciar**.
 
 ## Desarrollo
 
@@ -135,9 +144,10 @@ Otras órdenes:
 | `npm run snapshot` | Regenera la copia de la lista incluida en la aplicación |
 | `npm run icons` | Regenera los iconos y el símbolo de la interfaz |
 | `npm run dist` | Genera el instalador de Windows en `dist/` |
+| `npm run dist:release` | Compila y publica los archivos de actualización para una versión etiquetada; requiere `GH_TOKEN` |
 | `npm run dist:dir` | Genera la aplicación sin instalador, para probarla |
 
-Las pruebas cubren el analizador de listas M3U y el servidor del mando, y se ejecutan sin necesidad de abrir la aplicación.
+Las pruebas cubren listas M3U, la guía EPG, preferencias, puntuación de fuentes, órdenes del mando y seguridad de sus endpoints. La prueba de humo inicia Electron con un canal y un reproductor simulados; no contacta con una señal real.
 
 ## Estructura del proyecto
 
@@ -162,9 +172,9 @@ docs/                     capturas para esta documentación
 
 ## Privacidad
 
-Sin cuentas, sin telemetría y sin servidores propios. La aplicación solo se conecta a la lista pública de canales, a los servidores de vídeo de las cadenas, a los logotipos y a los reproductores oficiales. Las preferencias se guardan en tu equipo, en `%APPDATA%\Mundial TV`.
+Sin cuentas, sin telemetría y sin servidores propios. La aplicación se conecta a la lista y la guía públicas de TDTChannels, a GitHub Releases para buscar actualizaciones cuando esa opción está activa, a los servidores de vídeo de las cadenas, a los logotipos y a los reproductores oficiales. Las preferencias y las métricas de salud de fuentes se guardan en tu equipo, en `%APPDATA%\Mundial TV`. Las métricas guardan una huella SHA-256 de cada fuente, no su URL completa ni sus posibles parámetros.
 
-El mando escucha únicamente en la red local, está protegido por una clave que no se envía a ninguna parte y no sale a internet.
+El mando escucha únicamente en la red local. Su clave solo se usa entre el ordenador y el teléfono conectados a esa red; la página impide enviar esa clave como referente al cargar logotipos HTTPS.
 
 ## Aviso legal
 

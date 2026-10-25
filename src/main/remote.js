@@ -8,8 +8,8 @@
  * ajusta el volumen. No hace falta instalar nada ni emparejar nada: se abre la
  * dirección (o se escanea el código QR que muestra la aplicación) y ya está.
  *
- * Todo el tráfico se queda en la red local y cada arranque genera una clave
- * nueva, así que la página solo responde a quien haya visto el código.
+ * Todo el tráfico se queda en la red local. La clave persiste entre arranques
+ * y se puede invalidar desde la aplicación cuando el usuario la rota.
  */
 
 const crypto = require('node:crypto');
@@ -94,19 +94,23 @@ class Remote {
    * @param {() => object} options.getState estado actual de reproducción
    * @param {(command: object) => void} options.onCommand aviso a la ventana principal
    */
-  constructor({ getChannels, getState, onCommand, port = DEFAULT_PORT, token } = {}) {
+  constructor({ getChannels, getState, getProgrammes = () => [], onCommand, port = DEFAULT_PORT, token } = {}) {
     this.getChannels = getChannels;
     this.getState = getState;
+    this.getProgrammes = getProgrammes;
     this.onCommand = onCommand;
     this.port = port;
     // La clave se reutiliza entre arranques (la guarda la aplicación) para que
     // el móvil que ya la tenía guardada siga funcionando sin volver al QR.
-    this.token = token || crypto.randomBytes(16).toString('hex');
+    const candidateToken = String(token || '');
+    this.token = /^[a-f0-9]{32}$/i.test(candidateToken) ? candidateToken : crypto.randomBytes(16).toString('hex');
     this.server = null;
     this.address = localAddress();
     this.error = null;
     /** Puerto en el que realmente se ha escuchado. */
     this.activePort = null;
+    this.requestHistory = new Map();
+    this.commandHistory = new Map();
   }
 
   get url() {
@@ -148,24 +152,101 @@ class Remote {
 
   /** Canales en la forma reducida que consume el móvil. */
   channelsForPhone() {
-    return this.getChannels().map((channel) => ({
-      id: channel.id,
-      nombre: channel.name,
-      grupo: channel.group,
-      logo: /^https:\/\//i.test(channel.logo || '') ? channel.logo : '',
-      iniciales: (channel.name || '?').replace(/[^\p{L}\p{N}\s]+/gu, ' ').trim().split(/\s+/).slice(0, 2)
-        .map((word) => word[0] || '')
-        .join('')
-        .toUpperCase(),
-    }));
+    const state = this.getState() || {};
+    const favourites = new Set(Array.isArray(state.favorites) ? state.favorites : []);
+    const programmes = this.getProgrammes() || [];
+    const byChannel = new Map();
+    for (const programme of programmes) {
+      let list = byChannel.get(programme.channelId);
+      if (!list) byChannel.set(programme.channelId, (list = []));
+      list.push(programme);
+    }
+    return this.getChannels().map((channel) => {
+      const channelProgrammes = byChannel.get(String(channel.id).toLowerCase()) || [];
+      const now = Date.now();
+      const current = channelProgrammes.find((programme) => programme.start <= now && programme.stop > now) || null;
+      const next = channelProgrammes.find((programme) => programme.start >= (current ? current.stop : now)) || null;
+      return {
+        id: channel.id,
+        nombre: channel.name,
+        grupo: channel.group,
+        logo: /^https:\/\//i.test(channel.logo || '') ? channel.logo : '',
+        favorito: favourites.has(channel.id),
+        ahora: current ? current.title : '',
+        despues: next ? next.title : '',
+        inicio: current ? current.start : null,
+        fin: current ? current.stop : null,
+        progreso: current ? Math.max(0, Math.min(100, Math.round((now - current.start) / (current.stop - current.start) * 100))) : null,
+        iniciales: (channel.name || '?').replace(/[^\p{L}\p{N}\s]+/gu, ' ').trim().split(/\s+/).slice(0, 2)
+          .map((word) => word[0] || '')
+          .join('')
+          .toUpperCase(),
+      };
+    });
+  }
+
+  rateLimit(request, command = false) {
+    const now = Date.now();
+    const address = request.socket.remoteAddress || 'unknown';
+    const history = command ? this.commandHistory : this.requestHistory;
+    const windowMs = command ? 10_000 : 60_000;
+    const limit = command ? 30 : 150;
+    const recent = (history.get(address) || []).filter((time) => now - time < windowMs);
+    if (recent.length >= limit) {
+      history.set(address, recent);
+      return false;
+    }
+    recent.push(now);
+    history.set(address, recent);
+    if (history.size > 256) {
+      for (const [key, times] of history) {
+        if (!times.length || now - times[times.length - 1] >= windowMs) history.delete(key);
+      }
+    }
+    return true;
+  }
+
+  validCommand(command) {
+    if (!command || typeof command !== 'object' || Array.isArray(command)) return null;
+    const onlyKeys = (...keys) => Object.keys(command).every((key) => keys.includes(key));
+    switch (command.accion) {
+      case 'canal':
+      case 'favorito':
+        return onlyKeys('accion', 'canalId') && typeof command.canalId === 'string' && this.getChannels().some((channel) => channel.id === command.canalId)
+          ? { accion: command.accion, canalId: command.canalId }
+          : null;
+      case 'pausa':
+      case 'reanudar':
+      case 'detener':
+        return onlyKeys('accion') ? { accion: command.accion } : null;
+      case 'volumen':
+        return onlyKeys('accion', 'valor') && typeof command.valor === 'number' && Number.isFinite(command.valor) && command.valor >= 0 && command.valor <= 1
+          ? { accion: 'volumen', valor: command.valor }
+          : null;
+      default:
+        return null;
+    }
   }
 
   handle(request, response) {
-    const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
+    const url = new URL(request.url, 'http://localhost');
     const send = (status, body, type = 'application/json; charset=utf-8') => {
-      response.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+      response.writeHead(status, {
+        'Content-Type': type,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+        'Referrer-Policy': 'no-referrer',
+        'X-Frame-Options': 'DENY',
+        'Content-Security-Policy': "default-src 'self'; img-src 'self' data: https:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+      });
       response.end(body);
     };
+
+    if (!this.rateLimit(request)) {
+      send(429, JSON.stringify({ error: 'demasiadas peticiones' }));
+      return;
+    }
 
     const token = request.headers['x-clave'] || url.searchParams.get('k');
     // El navegador pide el controlador de servicio sin la clave, así que es lo
@@ -175,8 +256,16 @@ class Remote {
       return;
     }
 
-    if (token !== this.token) {
+    const suppliedToken = Buffer.from(String(token || ''));
+    const expectedToken = Buffer.from(this.token);
+    if (suppliedToken.length !== expectedToken.length || !crypto.timingSafeEqual(suppliedToken, expectedToken)) {
       send(403, JSON.stringify({ error: 'clave incorrecta' }));
+      return;
+    }
+
+    const origin = request.headers.origin;
+    if (origin && origin !== `http://${request.headers.host}`) {
+      send(403, JSON.stringify({ error: 'origen no permitido' }));
       return;
     }
 
@@ -231,12 +320,31 @@ class Remote {
     }
 
     if (request.method === 'POST' && url.pathname === '/api/comando') {
+      if (!/^application\/json(?:;|$)/i.test(String(request.headers['content-type'] || ''))) {
+        send(415, JSON.stringify({ error: 'se esperaba JSON' }));
+        request.resume();
+        return;
+      }
+      if (!this.rateLimit(request, true)) {
+        send(429, JSON.stringify({ error: 'demasiadas órdenes' }));
+        return;
+      }
+      if (Number(request.headers['content-length']) > 4096) {
+        send(413, JSON.stringify({ error: 'orden demasiado grande' }));
+        request.resume();
+        return;
+      }
       let body = '';
+      let tooLarge = false;
       request.on('data', (chunk) => {
-        body += chunk;
-        if (body.length > 4096) request.destroy();
+        if (Buffer.byteLength(body) + chunk.length > 4096) tooLarge = true;
+        else if (!tooLarge) body += chunk.toString('utf8');
       });
       request.on('end', () => {
+        if (tooLarge) {
+          send(413, JSON.stringify({ error: 'orden demasiado grande' }));
+          return;
+        }
         let command = null;
         try {
           command = JSON.parse(body || '{}');
@@ -244,11 +352,12 @@ class Remote {
           send(400, JSON.stringify({ error: 'petición ilegible' }));
           return;
         }
-        if (typeof command.accion !== 'string') {
-          send(400, JSON.stringify({ error: 'falta la acción' }));
+        const safeCommand = this.validCommand(command);
+        if (!safeCommand) {
+          send(400, JSON.stringify({ error: 'orden no válida' }));
           return;
         }
-        this.onCommand(command);
+        this.onCommand(safeCommand);
         send(200, JSON.stringify({ ok: true }));
       });
       return;
@@ -260,7 +369,12 @@ class Remote {
   /** Arranca el servidor. Si el puerto está ocupado, prueba el siguiente. */
   start(attempt = 0) {
     return new Promise((resolve) => {
-      const server = http.createServer((request, response) => this.handle(request, response));
+      const server = http.createServer({ maxHeaderSize: 8192 }, (request, response) => this.handle(request, response));
+      server.requestTimeout = 10_000;
+      server.headersTimeout = 15_000;
+      server.keepAliveTimeout = 5_000;
+      server.maxHeadersCount = 32;
+      server.maxConnections = 64;
       server.on('error', (error) => {
         if (error.code === 'EADDRINUSE' && attempt < 5) {
           this.port += 1;

@@ -16,13 +16,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y xvfb
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npx electron --version
       - run: npm run vendor
-      - run: npm test
+      - run: xvfb-run -a npm test
 
   windows:
     name: instalador de Windows
@@ -40,18 +42,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run vendor
-      - run: npm run dist
+      - name: Compilar instalador
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: npm run dist
+      - name: Compilar y publicar actualizacion
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm run dist:release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
         with:
           name: Mundial-TV-Windows
-          path: dist/*.exe
+          path: dist/*
           if-no-files-found: error
-
-      - name: Publicar la version
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/*.exe
-            dist/*.blockmap
-          generate_release_notes: true

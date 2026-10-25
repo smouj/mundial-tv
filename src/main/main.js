@@ -1,9 +1,11 @@
 'use strict';
 
 const { app, BrowserWindow, WebContentsView, ipcMain, net, screen, session, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const QRCode = require('qrcode');
 
@@ -11,6 +13,10 @@ const { parseM3U, groupChannels } = require('./playlist');
 const { Remote } = require('./remote');
 const { officialChannels } = require('./official-channels');
 const { Settings } = require('./settings');
+const { EPG_URL, EPG_TTL_MS, normalizeEpg } = require('./epg');
+const { sanitizeSettingsPatch, publicSettings, validExternalUrl, validOfficialUrl } = require('./ipc-security');
+const { recordSourceResult, rankSources } = require('./source-health');
+const { responseTextLimited, responseJsonLimited } = require('./http-utils');
 
 /** Lista pública de canales, mantenida por el proyecto TDTChannels (Apache-2.0). */
 const PLAYLIST_URL = 'https://www.tdtchannels.com/lists/tv.m3u8';
@@ -31,6 +37,9 @@ let officialView = null;
 let settings = null;
 /** @type {{channels: object[], meta: object}} */
 let catalogue = { channels: [], meta: { fetchedAt: null, source: 'none', count: 0 } };
+let epg = { programmes: [], meta: { fetchedAt: null, source: 'none', count: 0 } };
+let epgRefreshPromise = null;
+let epgRefreshTimer = null;
 let saveBoundsTimer = null;
 /** Ventana flotante del minirreproductor. */
 let miniWindow = null;
@@ -42,9 +51,15 @@ let adsSkipped = 0;
 let remote = null;
 /** Último estado publicado por la interfaz, que es lo que ve el móvil. */
 let remoteState = { actual: null, nombre: null, reproduciendo: false, volumen: 1 };
+let updateState = { status: 'idle', version: null, progress: null, error: null };
+let restoreAutoDownloadAfterCheck = false;
 
 function cacheDir() {
   return path.join(app.getPath('userData'), 'cache');
+}
+
+function epgCachePath() {
+  return path.join(cacheDir(), 'epg.json');
 }
 
 function snapshotPath() {
@@ -86,9 +101,14 @@ function installMediaRequestShims() {
 
 function readCache() {
   try {
-    const raw = fs.readFileSync(path.join(cacheDir(), 'playlist.json'), 'utf8');
+    const metadataPath = path.join(cacheDir(), 'playlist.json');
+    const playlistPath = path.join(cacheDir(), 'playlist.m3u');
+    if (fs.statSync(metadataPath).size > 1024 * 1024 || fs.statSync(playlistPath).size > 20 * 1024 * 1024) {
+      throw new Error('caché demasiado grande');
+    }
+    const raw = fs.readFileSync(metadataPath, 'utf8');
     const meta = JSON.parse(raw);
-    const text = fs.readFileSync(path.join(cacheDir(), 'playlist.m3u'), 'utf8');
+    const text = fs.readFileSync(playlistPath, 'utf8');
     if (!text.includes('#EXTM3U')) throw new Error('caché ilegible');
     return { text, meta };
   } catch {
@@ -121,17 +141,29 @@ async function downloadPlaylist() {
     cache: 'no-store',
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const text = await response.text();
+  const text = await responseTextLimited(response, 20 * 1024 * 1024);
   if (!text.includes('#EXTINF')) throw new Error('respuesta sin canales');
   return text;
 }
 
 function buildCatalogue(text, meta) {
-  const channels = [...groupChannels(parseM3U(text)), ...officialChannels()];
+  const channels = rankCatalogueSources([...groupChannels(parseM3U(text)), ...officialChannels()]);
   return {
     channels,
     meta: { ...meta, count: channels.length },
   };
+}
+
+function sourceHealthKey(url) {
+  return crypto.createHash('sha256').update(String(url)).digest('hex');
+}
+
+function rankCatalogueSources(channels) {
+  const health = settings ? settings.get('sourceHealth') : {};
+  return channels.map((channel) => {
+    const sources = (channel.sources || []).map((source) => ({ ...source, healthKey: sourceHealthKey(source.url) }));
+    return { ...channel, sources: rankSources(sources, health) };
+  });
 }
 
 function applySource(text, meta) {
@@ -184,6 +216,68 @@ async function refreshCatalogue() {
     catalogue.meta = { ...catalogue.meta, error: String(error && error.message ? error.message : error) };
     return catalogue;
   }
+}
+
+function applyEpg(programmes, meta) {
+  epg = { programmes, meta: { ...meta, count: programmes.length } };
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('epg:updated', epg);
+  return epg;
+}
+
+function loadEpgCache() {
+  try {
+    const file = epgCachePath();
+    if (fs.statSync(file).size > 40 * 1024 * 1024) return false;
+    const cached = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!cached || !Array.isArray(cached.programmes) || !cached.programmes.length) return false;
+    const programmes = normalizeEpg(cached.programmes);
+    const fetchedAt = Number(cached.meta && cached.meta.fetchedAt) || 0;
+    applyEpg(programmes, { fetchedAt, source: Date.now() - fetchedAt < EPG_TTL_MS ? 'cache' : 'cache-stale' });
+    return Date.now() - fetchedAt < EPG_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+async function refreshEpg() {
+  if (epgRefreshPromise) return epgRefreshPromise;
+  epgRefreshPromise = (async () => {
+    try {
+      const response = await net.fetch(EPG_URL, {
+        headers: { 'User-Agent': USER_AGENT, Accept: 'application/json,*/*' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await responseJsonLimited(response, 40 * 1024 * 1024);
+      const programmes = normalizeEpg(data);
+      const fetchedAt = Date.now();
+      const next = { programmes, meta: { fetchedAt, source: 'download', count: programmes.length } };
+      const file = epgCachePath();
+      const temporaryFile = `${file}.tmp`;
+      try {
+        fs.mkdirSync(cacheDir(), { recursive: true });
+        fs.writeFileSync(temporaryFile, JSON.stringify(next), 'utf8');
+        fs.renameSync(temporaryFile, file);
+      } catch {
+        try { fs.rmSync(temporaryFile, { force: true }); } catch { /* limpieza best-effort */ }
+      }
+      return applyEpg(programmes, next.meta);
+    } catch (error) {
+      return applyEpg(epg.programmes, {
+        ...epg.meta,
+        error: String(error && error.message ? error.message : error),
+      });
+    } finally {
+      epgRefreshPromise = null;
+    }
+  })();
+  return epgRefreshPromise;
+}
+
+async function warmEpg() {
+  if (loadEpgCache()) return epg;
+  return refreshEpg();
 }
 
 function windowOptions() {
@@ -253,6 +347,42 @@ function revealWindow() {
   mainWindow.focus();
 }
 
+function rendererUrl() {
+  return pathToFileURL(path.join(__dirname, '..', 'renderer', 'index.html')).href;
+}
+
+function isTrustedRenderer(event) {
+  return Boolean(mainWindow && !mainWindow.isDestroyed() && event &&
+    event.sender === mainWindow.webContents && event.senderFrame && event.senderFrame.url === rendererUrl());
+}
+
+function assertTrustedRenderer(event) {
+  if (!isTrustedRenderer(event)) throw new Error('Origen IPC no autorizado');
+}
+
+function isAllowedExternal(value) {
+  if (!validExternalUrl(value, { allowLanHttp: true })) return false;
+  try {
+    const url = new URL(String(value));
+    if (url.protocol === 'http:') return true;
+    const host = url.hostname.toLowerCase();
+    return validOfficialUrl(url.href) || host === 'github.com' || host === 'www.github.com' ||
+      host === 'tdtchannels.com' || host.endsWith('.tdtchannels.com');
+  } catch {
+    return false;
+  }
+}
+
+function openExternalSafely(value) {
+  if (!isAllowedExternal(value)) return false;
+  try {
+    void shell.openExternal(String(value)).catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow(windowOptions());
   mainWindow.once('ready-to-show', revealWindow);
@@ -266,8 +396,11 @@ function createWindow() {
     mainWindow = null;
   });
 
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url !== rendererUrl()) event.preventDefault();
+  });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    openExternalSafely(url);
     return { action: 'deny' };
   });
 
@@ -290,7 +423,7 @@ function clampBounds(bounds) {
  */
 function openOfficialView({ url, bounds }) {
   if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'sin ventana' };
-  if (!/^https:\/\/(www\.)?(mitele\.es|atresplayer\.com)\//i.test(String(url))) {
+  if (!validOfficialUrl(url)) {
     return { ok: false, error: 'dirección no permitida' };
   }
 
@@ -307,6 +440,15 @@ function openOfficialView({ url, bounds }) {
   });
   officialView = view;
   view.webContents.setUserAgent(USER_AGENT);
+  view.webContents.on('will-navigate', (event, nextUrl) => {
+    if (validOfficialUrl(nextUrl)) return;
+    event.preventDefault();
+    openExternalSafely(nextUrl);
+  });
+  view.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
+    openExternalSafely(nextUrl);
+    return { action: 'deny' };
+  });
   mainWindow.contentView.addChildView(view);
   view.setBounds(clampBounds(bounds));
   view.webContents.loadURL(url);
@@ -504,7 +646,8 @@ function startRemote() {
     token: remoteToken(),
     port,
     getChannels: () => catalogue.channels,
-    getState: () => remoteState,
+    getState: () => ({ ...remoteState, favorites: settings.get('favourites') || [] }),
+    getProgrammes: () => epg.programmes,
     onCommand: (command) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('remote:command', command);
@@ -515,8 +658,6 @@ function startRemote() {
   return remote.start().then((info) => {
     if (info.running) {
       if (settings.get('remotePort') !== info.port) settings.patch({ remotePort: info.port });
-      // Útil al arrancar desde una consola: deja a la vista la dirección.
-      console.log(`Mando del móvil: ${info.url}`);
     }
     return info;
   });
@@ -554,60 +695,156 @@ function controlOfficialPlayback(action, value) {
   const scripts = {
     pausa: 'document.querySelectorAll("video").forEach((v) => v.pause())',
     reanudar: 'document.querySelectorAll("video").forEach((v) => v.play())',
-    volumen: `document.querySelectorAll("video").forEach((v) => { v.volume = ${Number(value)}; v.muted = false; })`,
+    volumen: Number.isFinite(value) && value >= 0 && value <= 1
+      ? `document.querySelectorAll("video").forEach((v) => { v.volume = ${value}; v.muted = false; })`
+      : null,
   };
   const script = scripts[action];
-  if (!script) return { ok: false };
+  if (typeof script !== 'string') return { ok: false };
   officialView.webContents.executeJavaScript(script, true).catch(() => {});
   return { ok: true };
 }
 
-function registerIpc() {
-  ipcMain.handle('channels:list', () => catalogue);
-  ipcMain.handle('channels:refresh', () => refreshCatalogue());
-  ipcMain.handle('settings:get', () => settings.get());
-  ipcMain.handle('settings:set', (_event, changes) => {
-    const updated = settings.patch(changes && typeof changes === 'object' ? changes : {});
-    // Activar o desactivar el salto de anuncios surte efecto sin cambiar de canal.
-    if (changes && 'skipAds' in changes && officialView) startAdWatcher();
-    return updated;
+function publishUpdateState(next) {
+  updateState = { ...updateState, ...next };
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updates:status', updateState);
+  return updateState;
+}
+
+function restoreAutoDownloadPreference() {
+  if (!restoreAutoDownloadAfterCheck) return;
+  restoreAutoDownloadAfterCheck = false;
+  autoUpdater.autoDownload = settings.get('automaticUpdates') !== false;
+}
+
+function configureUpdater() {
+  autoUpdater.autoDownload = settings.get('automaticUpdates') !== false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.on('checking-for-update', () => publishUpdateState({ status: 'checking', error: null }));
+  autoUpdater.on('update-available', (info) => publishUpdateState({ status: 'available', version: info.version, error: null }));
+  autoUpdater.on('update-not-available', () => {
+    restoreAutoDownloadPreference();
+    publishUpdateState({ status: 'current', progress: null, error: null });
   });
-  ipcMain.handle('official:open', (_event, payload) => openOfficialView(payload || {}));
-  ipcMain.handle('official:bounds', (_event, bounds) => {
+  autoUpdater.on('download-progress', (progress) => publishUpdateState({ status: 'downloading', progress: Math.round(progress.percent || 0) }));
+  autoUpdater.on('update-downloaded', (info) => {
+    restoreAutoDownloadPreference();
+    publishUpdateState({ status: 'downloaded', version: info.version, progress: 100, error: null });
+  });
+  autoUpdater.on('error', () => {
+    restoreAutoDownloadPreference();
+    publishUpdateState({ status: 'error', error: 'No se pudo buscar o descargar la actualización.' });
+  });
+}
+
+async function requestUpdateCheck({ manual = false } = {}) {
+  if (!app.isPackaged) return publishUpdateState({ status: 'development', error: null });
+  const automatic = settings.get('automaticUpdates') !== false;
+  if (!automatic && !manual) return publishUpdateState({ status: 'disabled', error: null });
+  if (!automatic && manual) {
+    autoUpdater.autoDownload = true;
+    restoreAutoDownloadAfterCheck = true;
+  }
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch {
+    restoreAutoDownloadPreference();
+    publishUpdateState({ status: 'error', error: 'No se pudo buscar o descargar la actualización.' });
+  }
+  return updateState;
+}
+
+function registerIpc() {
+  const handle = (channel, callback) => ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedRenderer(event);
+    return callback(event, ...args);
+  });
+  handle('channels:list', () => catalogue);
+  handle('channels:refresh', () => refreshCatalogue());
+  handle('epg:get', () => epg);
+  handle('epg:refresh', () => refreshEpg());
+  handle('settings:get', () => publicSettings(settings.get()));
+  handle('settings:set', (_event, changes) => {
+    const safeChanges = sanitizeSettingsPatch(changes);
+    const updated = settings.patch(safeChanges);
+    // Activar o desactivar el salto de anuncios surte efecto sin cambiar de canal.
+    if ('skipAds' in safeChanges && officialView) startAdWatcher();
+    if ('automaticUpdates' in safeChanges) {
+      autoUpdater.autoDownload = safeChanges.automaticUpdates;
+      if (!safeChanges.automaticUpdates) publishUpdateState({ status: 'disabled', error: null });
+    }
+    return publicSettings(updated);
+  });
+  handle('source-health:record', (_event, payload) => {
+    if (!payload || typeof payload !== 'object' || !['success', 'failure'].includes(payload.result)) return { ok: false };
+    const url = typeof payload.url === 'string' ? payload.url : '';
+    const isKnownSource = catalogue.channels.some((channel) => (channel.sources || []).some((source) => source.url === url));
+    if (!isKnownSource) return { ok: false };
+    const startupMs = Number(payload.startupMs);
+    const sourceHealth = recordSourceResult(
+      settings.get('sourceHealth'),
+      sourceHealthKey(url),
+      payload.result === 'success',
+      Number.isFinite(startupMs) ? startupMs : null,
+    );
+    settings.patch({ sourceHealth });
+    catalogue = { ...catalogue, channels: rankCatalogueSources(catalogue.channels) };
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('channels:updated', catalogue);
+    return { ok: true, sourceHealth };
+  });
+  handle('official:open', (_event, payload) => openOfficialView(payload || {}));
+  handle('official:bounds', (_event, bounds) => {
     stageBounds = clampBounds(bounds);
     if (officialView && !miniWindow) officialView.setBounds(stageBounds);
     return { ok: Boolean(officialView) };
   });
-  ipcMain.handle('official:mini', (_event, active) => (active ? enterMiniView() : leaveMiniView()));
-  ipcMain.handle('official:visible', (_event, visible) => {
+  handle('official:mini', (_event, active) => (active ? enterMiniView() : leaveMiniView()));
+  handle('official:visible', (_event, visible) => {
     // La vista del reproductor oficial se pinta siempre por encima de la
     // página: hay que apartarla mientras se muestra un cuadro de diálogo, o el
     // diálogo quedaría oculto detrás del vídeo.
     if (officialView) officialView.setVisible(Boolean(visible));
     return { ok: Boolean(officialView) };
   });
-  ipcMain.handle('official:close', () => {
+  handle('official:close', () => {
     closeOfficialView();
     return { ok: true };
   });
-  ipcMain.handle('app:openExternal', (_event, url) => {
-    if (/^https?:\/\//i.test(String(url))) shell.openExternal(String(url));
+  handle('app:openExternal', (_event, url) => {
+    return { ok: openExternalSafely(url) };
+  });
+  handle('remote:info', () => remoteInfo());
+  handle('remote:rotate', () => rotateRemoteToken());
+  handle('remote:refresh', () => remoteInfo());
+  handle('updates:status', () => updateState);
+  handle('updates:check', () => requestUpdateCheck({ manual: true }));
+  handle('updates:install', () => {
+    if (updateState.status !== 'downloaded') return { ok: false };
+    autoUpdater.quitAndInstall(false, true);
     return { ok: true };
   });
-  ipcMain.handle('remote:info', () => remoteInfo());
-  ipcMain.handle('remote:rotate', () => rotateRemoteToken());
-  ipcMain.handle('remote:refresh', () => remoteInfo());
-  ipcMain.on('remote:state', (_event, payload) => {
-    if (payload && typeof payload === 'object') remoteState = { ...remoteState, ...payload };
+  ipcMain.on('remote:state', (event, payload) => {
+    if (!isTrustedRenderer(event) || !payload || typeof payload !== 'object') return;
+    const channel = catalogue.channels.find((item) => item.id === payload.actual) || null;
+    const volume = Number(payload.volumen);
+    remoteState = {
+      actual: channel ? channel.id : null,
+      nombre: channel ? channel.name : null,
+      reproduciendo: Boolean(channel && payload.reproduciendo),
+      volumen: Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : remoteState.volumen,
+    };
   });
-  ipcMain.handle('official:control', (_event, action, value) => controlOfficialPlayback(action, value));
-  ipcMain.handle('app:info', () => ({
+  handle('official:control', (_event, action, value) => controlOfficialPlayback(action, value));
+  handle('app:info', () => ({
     name: app.getName(),
     version: app.getVersion(),
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     platform: process.platform,
     playlist: catalogue.meta,
+    epg: epg.meta,
+    updates: updateState,
+    testMode: process.env.MUNDIAL_TEST_MODE === '1',
     repository: 'https://github.com/smouj/mundial-tv',
     attribution: 'Lista de canales: proyecto TDTChannels (LaQuay), Apache-2.0',
   }));
@@ -626,6 +863,10 @@ if (!app.requestSingleInstanceLock()) {
   app.setAppUserModelId('es.smouj.mundialtv');
 
   app.whenReady().then(async () => {
+    const testMode = process.env.MUNDIAL_TEST_MODE === '1';
+    if (testMode && process.env.MUNDIAL_TEST_USER_DATA) {
+      app.setPath('userData', process.env.MUNDIAL_TEST_USER_DATA);
+    }
     settings = new Settings(path.join(app.getPath('userData'), 'settings.json'));
     settings.load();
 
@@ -635,10 +876,20 @@ if (!app.requestSingleInstanceLock()) {
     );
 
     registerIpc();
+    if (testMode) {
+      createWindow();
+      return;
+    }
     loadLocalCatalogue();
+    loadEpgCache();
     createWindow();
     warmCatalogue();
+    warmEpg();
+    clearInterval(epgRefreshTimer);
+    epgRefreshTimer = setInterval(() => refreshEpg(), EPG_TTL_MS);
     startRemote();
+    configureUpdater();
+    if (settings.get('automaticUpdates') !== false && app.isPackaged) requestUpdateCheck();
   });
 
   app.on('window-all-closed', () => {
@@ -647,6 +898,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('before-quit', () => {
     if (remote) remote.stop();
+    if (epgRefreshTimer) clearInterval(epgRefreshTimer);
   });
 
   app.on('activate', () => {
