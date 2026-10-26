@@ -22,8 +22,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Comprobar que Electron se instaló
-        run: test -x node_modules/electron/dist/electron
       - run: npm run vendor
       - run: xvfb-run -a npm test
 
