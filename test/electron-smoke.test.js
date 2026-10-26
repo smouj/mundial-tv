@@ -78,19 +78,12 @@ test('Electron abre la rejilla y reproduce un canal de prueba', { timeout: 45_00
     if (electronRequired) throw new Error(message);
     t.skip(message);
   };
-  let electronRoot;
-  try { electronRoot = path.dirname(require.resolve('electron/package.json')); } catch {
+  let electronPath;
+  try { electronPath = require('electron'); } catch {
     skipOrFail('Electron no está instalado');
     return;
   }
-  const pathFile = path.join(electronRoot, 'path.txt');
-  const executableName = process.platform === 'win32' ? 'electron.exe' : 'electron';
-  const electronPath = process.env.ELECTRON_OVERRIDE_DIST_PATH
-    ? path.join(process.env.ELECTRON_OVERRIDE_DIST_PATH, executableName)
-    : fs.existsSync(pathFile)
-      ? path.join(electronRoot, 'dist', fs.readFileSync(pathFile, 'utf8').trim())
-      : '';
-  if (!electronPath || !fs.existsSync(electronPath)) {
+  if (typeof electronPath !== 'string' || !fs.existsSync(electronPath)) {
     skipOrFail('Electron está declarado, pero su binario no está instalado');
     return;
   }
@@ -114,9 +107,22 @@ test('Electron abre la rejilla y reproduce un canal de prueba', { timeout: 45_00
   child.stdout.on('data', (chunk) => { output = (output + chunk.toString()).slice(-4000); });
   child.stderr.on('data', (chunk) => { output = (output + chunk.toString()).slice(-4000); });
   t.after(async () => {
-    child.kill();
-    await Promise.race([new Promise((resolve) => child.once('exit', resolve)), delay(2500)]);
-    if (tempRoot.startsWith(os.tmpdir())) fs.rmSync(tempRoot, { recursive: true, force: true });
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise((resolve) => child.once('exit', resolve));
+      child.kill();
+      await Promise.race([exited, delay(2500)]);
+    }
+    if (tempRoot.startsWith(os.tmpdir())) {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+          fs.rmSync(tempRoot, { recursive: true, force: true });
+          break;
+        } catch (error) {
+          if (attempt === 3) t.diagnostic(`No se pudo limpiar el perfil temporal: ${error.message}`);
+          else await delay(200);
+        }
+      }
+    }
   });
 
   let cdp;
